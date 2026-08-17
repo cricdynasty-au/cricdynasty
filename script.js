@@ -100,6 +100,22 @@ const T20_WINDOW = {
 
 const OPPONENT_NATIONS_POOL = COUNTRIES.map(c => c.name);
 
+const GROUNDS_BY_COUNTRY = {
+  "India": ["Wankhede Stadium, Mumbai", "Eden Gardens, Kolkata", "M. Chinnaswamy Stadium, Bengaluru", "Narendra Modi Stadium, Ahmedabad", "Arun Jaitley Stadium, Delhi", "M. A. Chidambaram Stadium, Chennai"],
+  "Australia": ["Melbourne Cricket Ground", "Sydney Cricket Ground", "The Gabba, Brisbane", "Adelaide Oval", "Perth Stadium", "Bellerive Oval, Hobart"],
+  "England": ["Lord's, London", "The Oval, London", "Old Trafford, Manchester", "Edgbaston, Birmingham", "Headingley, Leeds", "Trent Bridge, Nottingham"],
+  "Pakistan": ["Gaddafi Stadium, Lahore", "National Stadium, Karachi", "Rawalpindi Cricket Stadium", "Multan Cricket Stadium"],
+  "South Africa": ["Wanderers Stadium, Johannesburg", "Newlands, Cape Town", "Kingsmead, Durban", "St George's Park, Gqeberha"],
+  "New Zealand": ["Eden Park, Auckland", "Basin Reserve, Wellington", "Hagley Oval, Christchurch", "Seddon Park, Hamilton"],
+  "West Indies": ["Kensington Oval, Barbados", "Sabina Park, Jamaica", "Queen's Park Oval, Trinidad", "Providence Stadium, Guyana"],
+  "Sri Lanka": ["R. Premadasa Stadium, Colombo", "Galle International Stadium", "Pallekele International Stadium"],
+  "Bangladesh": ["Sher-e-Bangla Stadium, Dhaka", "Zahur Ahmed Chowdhury Stadium, Chattogram", "Sylhet International Cricket Stadium"],
+  "Afghanistan": ["Kabul International Cricket Stadium", "Ghazi Amanullah International Stadium"],
+};
+const WTC_FINAL_GROUND = "The Oval, London";
+
+function groundFor(country) { return choice(GROUNDS_BY_COUNTRY[country] || GROUNDS_BY_COUNTRY.India); }
+
 // sponsors unlock in tiers as reputation and standing grow
 const SPONSOR_TIERS = {
   1: ["M&H", "JP Gavan", "JK Cricket"],
@@ -259,7 +275,7 @@ function simulateBatting(rating, oppStrength, fmt) {
   const form = randInt(-8, 8);
   const effective = clamp(rating + form - (oppStrength - 50) / 4, 1, 99);
   const mean = clamp(cfg.base + effective * cfg.slope, 3, 70);
-  const runs = clamp(Math.round(-Math.log(Math.random()) * mean), 0, Math.round(mean * 4.2));
+  const runs = clamp(Math.round(-Math.log(Math.random()) * mean), 0, Math.round(mean * 3.4));
   const outBase = longFmt ? 0.84 : fmt === "ODI" ? 0.77 : 0.8;
   const outChance = clamp(outBase - effective / 900, 0.55, 0.92);
   const out = Math.random() < outChance;
@@ -304,9 +320,16 @@ function teamWinProbability(teamStrength, oppStrength, perf) {
   return clamp(0.5 + diff / 130, 0.15, 0.85);
 }
 
-// international matches lean much more heavily on the nation's own baseline strength than any one player
+// domestic/franchise sides lean mostly on their fixed baseline, with a modest nudge from how good you currently are
+function domesticTeamStrength(p) {
+  return clamp(p.teamStrength * 0.72 + ((p.bat + p.bowl) / 2) * 0.28, 15, 99);
+}
+
+// international matches lean much more heavily on the nation's own baseline strength than any one player,
+// but your own current rating still moves the needle a little
 function intlTeamStrength(p) {
-  return clamp(NATION_STRENGTH[p.country] + (p.isNationalCaptain ? 4 : 0) + randInt(-4, 4), 20, 99);
+  const base = NATION_STRENGTH[p.country] * 0.82 + ((p.bat + p.bowl) / 2) * 0.18;
+  return clamp(base + (p.isNationalCaptain ? 4 : 0) + randInt(-4, 4), 20, 99);
 }
 
 function milestonesFor(perf) {
@@ -318,6 +341,20 @@ function milestonesFor(perf) {
   if (perf.bowled && perf.wickets >= 5) out.push(`🎯 Five-wicket haul! ${perf.wickets}/${perf.runsConceded}`);
   else if (perf.bowled && perf.wickets >= 3) out.push(`👏 ${perf.wickets}-wicket spell`);
   return out;
+}
+
+function matchMarginText(won, fmt) {
+  const longFmt = fmt === "TEST" || fmt === "FC";
+  if (Math.random() < 0.5) {
+    const wkts = longFmt ? randInt(3, 10) : randInt(1, 9);
+    return `${won ? "Won" : "Lost"} by ${wkts} wicket${wkts === 1 ? "" : "s"}`;
+  }
+  if (longFmt && Math.random() < 0.22) {
+    const runs = randInt(20, 220);
+    return `${won ? "Won" : "Lost"} by an innings and ${runs} run${runs === 1 ? "" : "s"}`;
+  }
+  const runs = longFmt ? randInt(15, 220) : randInt(2, 90);
+  return `${won ? "Won" : "Lost"} by ${runs} run${runs === 1 ? "" : "s"}`;
 }
 
 /* ================= archetypes ("played like") ================= */
@@ -439,7 +476,7 @@ function buildFixtures(n, strengthRange, poolCountryTeams, excludeTeam) {
   const pool = poolCountryTeams.filter(t => t !== excludeTeam);
   const fixtures = [];
   for (let i = 0; i < n; i++) {
-    fixtures.push({ opponent: choice(pool.length ? pool : poolCountryTeams), oppStrength: randInt(35, 70), played: false, fmt: domesticFmtTag(state) });
+    fixtures.push({ opponent: choice(pool.length ? pool : poolCountryTeams), oppStrength: randInt(35, 70), played: false, fmt: domesticFmtTag(state), ground: groundFor(state.country) });
   }
   return fixtures;
 }
@@ -459,8 +496,10 @@ function startSeason() {
   p.lastMatchResult = null; p.lastLeagueFinish = null; p.lastSeasonSummary = null;
   p.lastIntlSummary = null; p.lastFranchiseSummary = null;
   p.bigEvent = bigEventInfo(p);
+  p.tournamentTable = null;
   p.wheelResult = null;
   p.introShownThisWindow = false;
+  p.debutPending = null;
   p.hubTab = "Overview";
   save();
 }
@@ -469,11 +508,11 @@ function playDomesticMatch() {
   const p = state;
   const fx = p.fixtures[p.matchIndex];
   const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
-  const won = Math.random() < teamWinProbability(p.teamStrength, fx.oppStrength, perf);
+  const won = Math.random() < teamWinProbability(domesticTeamStrength(p), fx.oppStrength, perf);
   fx.played = true; fx.won = won;
   addStat(p.seasonDomStats, perf); addStat(p.stats.domestic, perf);
   p.caps.domestic += 1;
-  p.lastMatchResult = { kind: "domestic", fmt: fx.fmt, opponent: fx.opponent, won, perf, milestones: milestonesFor(perf) };
+  p.lastMatchResult = { kind: "domestic", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf) };
   p.matchIndex += 1;
   gainReputation(perf, won);
   if (p.matchIndex >= p.fixtures.length) finishDomesticSeason();
@@ -485,7 +524,7 @@ function simRestOfDomesticSeason() {
   while (p.matchIndex < p.fixtures.length) {
     const fx = p.fixtures[p.matchIndex];
     const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
-    const won = Math.random() < teamWinProbability(p.teamStrength, fx.oppStrength, perf);
+    const won = Math.random() < teamWinProbability(domesticTeamStrength(p), fx.oppStrength, perf);
     fx.played = true; fx.won = won;
     addStat(p.seasonDomStats, perf); addStat(p.stats.domestic, perf);
     p.caps.domestic += 1;
@@ -533,7 +572,7 @@ function finishDomesticSeason() {
 function startFranchiseStint() {
   const p = state;
   const pool = teamPoolFor(p.country, "FRANCHISE");
-  p.franchiseFixtures = pickN(pool.filter(t => t !== p.franchiseTeam), 4).map(opp => ({ opponent: opp, oppStrength: randInt(40, 72), played: false, fmt: "FRANCHISE" }));
+  p.franchiseFixtures = pickN(pool.filter(t => t !== p.franchiseTeam), 4).map(opp => ({ opponent: opp, oppStrength: randInt(40, 72), played: false, fmt: "FRANCHISE", ground: groundFor(p.country) }));
   p.franchiseIndex = 0;
   p.franchiseDone = false;
 }
@@ -542,11 +581,11 @@ function playFranchiseMatch() {
   const p = state;
   const fx = p.franchiseFixtures[p.franchiseIndex];
   const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
-  const won = Math.random() < teamWinProbability(p.teamStrength + 4, fx.oppStrength, perf);
+  const won = Math.random() < teamWinProbability(domesticTeamStrength(p) + 4, fx.oppStrength, perf);
   fx.played = true; fx.won = won;
   addStat(p.seasonFranchiseStats, perf); addStat(p.stats.franchise, perf);
   p.caps.franchise += 1;
-  p.lastMatchResult = { kind: "franchise", fmt: "FRANCHISE", opponent: fx.opponent, won, perf, milestones: milestonesFor(perf) };
+  p.lastMatchResult = { kind: "franchise", fmt: "FRANCHISE", opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf) };
   p.franchiseIndex += 1;
   gainReputation(perf, won);
   if (p.franchiseIndex >= p.franchiseFixtures.length) finishFranchiseStint();
@@ -558,7 +597,7 @@ function simRestOfFranchise() {
   while (p.franchiseIndex < p.franchiseFixtures.length) {
     const fx = p.franchiseFixtures[p.franchiseIndex];
     const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
-    const won = Math.random() < teamWinProbability(p.teamStrength + 4, fx.oppStrength, perf);
+    const won = Math.random() < teamWinProbability(domesticTeamStrength(p) + 4, fx.oppStrength, perf);
     fx.played = true; fx.won = won;
     addStat(p.seasonFranchiseStats, perf); addStat(p.stats.franchise, perf);
     p.caps.franchise += 1;
@@ -586,8 +625,15 @@ function decideInternationalSelection() {
   let chance = clamp((ratingScore + formScore * 1.6 + p.reputation * 0.3) / 150, 0.04, 0.93);
   if (established) chance = clamp(chance + 0.15, 0.04, 0.96);
   p.selectedThisSeason = Math.random() < chance;
+  p.tournamentTable = null;
   if (p.selectedThisSeason) {
-    // reaching a Final at all is gated by the nation's own standing — a weak side rarely gets there
+    if (p.bigEvent.active) {
+      // you can't headline a World Cup or a Final in a format you've never actually played before
+      const priorCaps = p.formatCaps[p.bigEvent.fmt] || 0;
+      const minNeeded = p.bigEvent.kind === "FINAL" ? 4 : 1;
+      if (priorCaps < minNeeded) p.bigEvent = { active: false };
+    }
+    // reaching a Final at all is also gated by the nation's own standing — a weak side rarely gets there
     if (p.bigEvent.active && p.bigEvent.kind === "FINAL") {
       const qualifyChance = clamp((NATION_STRENGTH[p.country] - 38) / 62, 0.04, 0.92);
       if (Math.random() >= qualifyChance) p.bigEvent = { active: false };
@@ -595,15 +641,39 @@ function decideInternationalSelection() {
     const games = p.bigEvent.active ? (p.bigEvent.kind === "FINAL" ? 1 : 5) : randInt(3, 4);
     const fmt = p.bigEvent.active ? p.bigEvent.fmt : intlFmtTag(p);
     const oppPool = OPPONENT_NATIONS_POOL.filter(n => n !== p.country);
+    const isWtcFinal = p.bigEvent.active && p.bigEvent.kind === "FINAL";
     p.intlFixtures = pickN(oppPool, games).map(opp => ({
       opponent: opp, oppStrength: randInt(45, 80), played: false,
       fmt: p.bigEvent.active ? fmt : intlFmtTag(p),
       tag: p.bigEvent.active ? p.bigEvent.name : "Series",
+      ground: isWtcFinal ? WTC_FINAL_GROUND : (Math.random() < 0.5 ? groundFor(p.country) : groundFor(opp)),
     }));
+    if (p.bigEvent.active && p.bigEvent.kind === "GROUP") {
+      const opponents = p.intlFixtures.map(f => f.opponent);
+      const extraPool = OPPONENT_NATIONS_POOL.filter(n => n !== p.country && !opponents.includes(n));
+      const extras = pickN(extraPool, Math.min(2, extraPool.length));
+      p.tournamentTable = [p.country, ...opponents, ...extras].map(n => ({ nation: n, played: 0, won: 0, lost: 0, pts: 0 }));
+    }
   } else {
     p.intlDone = true;
   }
   save();
+}
+
+function updateTournamentTable(opponentName, playerWon) {
+  const p = state;
+  if (!p.tournamentTable) return;
+  const meRow = p.tournamentTable.find(r => r.nation === p.country);
+  const oppRow = p.tournamentTable.find(r => r.nation === opponentName);
+  if (meRow) { meRow.played++; if (playerWon) { meRow.won++; meRow.pts += 2; } else meRow.lost++; }
+  if (oppRow) { oppRow.played++; if (!playerWon) { oppRow.won++; oppRow.pts += 2; } else oppRow.lost++; }
+  const others = p.tournamentTable.filter(r => r.nation !== p.country && r.nation !== opponentName);
+  if (others.length >= 2) {
+    const [a, b] = pickN(others, 2);
+    const aWins = (NATION_STRENGTH[a.nation] + rand(-8, 8)) > (NATION_STRENGTH[b.nation] + rand(-8, 8));
+    a.played++; b.played++;
+    if (aWins) { a.won++; a.pts += 2; b.lost++; } else { b.won++; b.pts += 2; a.lost++; }
+  }
 }
 
 function playIntlMatch() {
@@ -614,9 +684,11 @@ function playIntlMatch() {
   fx.played = true; fx.won = won;
   addStat(p.seasonIntlStats, perf); addStat(p.stats.intl, perf);
   p.caps.intl += 1;
-  p.lastMatchResult = { kind: "intl", fmt: fx.fmt, opponent: fx.opponent, won, perf, milestones: milestonesFor(perf), tag: fx.tag };
+  p.formatCaps[fx.fmt] = (p.formatCaps[fx.fmt] || 0) + 1;
+  p.lastMatchResult = { kind: "intl", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tag: fx.tag };
   p.intlIndex += 1;
   gainReputation(perf, won);
+  updateTournamentTable(fx.opponent, won);
   if (p.intlIndex >= p.intlFixtures.length) finishInternationalWindow();
   save();
 }
@@ -630,7 +702,9 @@ function simRestOfIntl() {
     fx.played = true; fx.won = won;
     addStat(p.seasonIntlStats, perf); addStat(p.stats.intl, perf);
     p.caps.intl += 1;
+    p.formatCaps[fx.fmt] = (p.formatCaps[fx.fmt] || 0) + 1;
     gainReputation(perf, won);
+    updateTournamentTable(fx.opponent, won);
     p.intlIndex += 1;
   }
   p.lastMatchResult = null;
@@ -654,18 +728,20 @@ function finishInternationalWindow() {
       finishTag = won1 ? "Champions" : "Runners-up";
       if (won1) trophy = { season: p.season, name: `${p.bigEvent.name} — Champions (${p.country})${captainNote}`, icon: "🏆" };
     } else {
-      const strength = (p.bat + p.bowl) * 0.5 * 0.28 + nationStrength * 0.6 + wins * 2.5 + (p.isNationalCaptain ? 5 : 0);
-      const roll = strength + rand(-16, 16);
-      if (roll > 88) finishTag = "Champions";
-      else if (roll > 74) finishTag = "Runners-up";
-      else if (roll > 58) finishTag = "Semi-finalists";
+      // your final table position drives the outcome — the table isn't just decoration
+      const sorted = (p.tournamentTable || []).slice().sort((a, b) => b.pts - a.pts);
+      const rank = sorted.findIndex(r => r.nation === p.country) + 1 || sorted.length + 1;
+      const nationBoost = (nationStrength - 70) / 220;
+      if (rank === 1) finishTag = Math.random() < clamp(0.55 + nationBoost, 0.35, 0.8) ? "Champions" : "Runners-up";
+      else if (rank === 2) finishTag = Math.random() < clamp(0.4 + nationBoost, 0.2, 0.6) ? "Runners-up" : "Semi-finalists";
+      else if (rank <= 4) finishTag = Math.random() < 0.32 ? "Semi-finalists" : "Group stage exit";
       else finishTag = "Group stage exit";
-      // real cricket has upsets — a small flat chance of glory regardless of the odds above
-      if (finishTag !== "Champions" && Math.random() < 0.03) finishTag = "Champions";
+      // real cricket has upsets — a small flat chance of glory regardless of table position
+      if (finishTag !== "Champions" && Math.random() < 0.025) finishTag = "Champions";
       if (finishTag === "Champions") trophy = { season: p.season, name: `${p.bigEvent.name} — Champions (${p.country})${captainNote}`, icon: "🏆" };
     }
     if (trophy) p.trophies.push(trophy);
-    p.lastIntlSummary = { stats: { ...s }, wins, bigEvent: true, eventName: p.bigEvent.name, finishTag, trophy };
+    p.lastIntlSummary = { stats: { ...s }, wins, bigEvent: true, eventName: p.bigEvent.name, finishTag, trophy, finalTable: p.tournamentTable };
   } else {
     p.lastIntlSummary = { stats: { ...s }, wins, bigEvent: false };
   }
@@ -972,12 +1048,8 @@ function renderCreate() {
 function renderHub() {
   const p = state;
   applyCurrentTheme(p);
-  const tabs = ["Overview", "Fixtures", "Rankings", "Career"];
-  let body = "";
-  if (p.hubTab === "Fixtures") body = renderHubFixtures();
-  else if (p.hubTab === "Rankings") body = renderHubRankings();
-  else if (p.hubTab === "Career") body = renderHubCareer();
-  else body = renderHubOverview();
+  const tabs = ["Overview", "Career"];
+  const mainBody = p.hubTab === "Career" ? renderHubCareer() : renderHubOverview();
 
   screen(`
     ${masthead()}
@@ -988,11 +1060,25 @@ function renderHub() {
         <div class="player-sub">${p.role} · Age ${p.age} · ${p.team}${p.isDomesticCaptain ? " (c)" : ""}</div>
       </div>
     </div>
-    <div class="tab-bar">
-      ${tabs.map(t => `<div class="tab-btn ${p.hubTab === t ? "active" : ""}" onclick="App.setHubTab('${t}')">${t}</div>`).join("")}
+    <div class="hub-layout">
+      <div class="hub-main">
+        <div class="tab-bar">
+          ${tabs.map(t => `<div class="tab-btn ${p.hubTab === t ? "active" : ""}" onclick="App.setHubTab('${t}')">${t}</div>`).join("")}
+        </div>
+        ${mainBody}
+      </div>
+      <div class="hub-side">
+        ${renderHubSidebar()}
+      </div>
     </div>
-    ${body}
   `);
+}
+
+function nextUpGround(p) {
+  if (!p.domesticDone && p.fixtures[p.matchIndex]) return p.fixtures[p.matchIndex].ground;
+  if (p.format === "ALL_ROUND" && !p.franchiseDone && p.franchiseFixtures[p.franchiseIndex]) return p.franchiseFixtures[p.franchiseIndex].ground;
+  if (p.selectedThisSeason && !p.intlDone && p.intlFixtures[p.intlIndex]) return p.intlFixtures[p.intlIndex].ground;
+  return null;
 }
 
 function renderHubOverview() {
@@ -1023,11 +1109,13 @@ function renderHubOverview() {
     actionButtons = `<button class="primary" onclick="App.goSeasonSummary()">📋 View season summary</button>`;
   }
 
+  const ground = nextUpGround(p);
   const played = p.fixtures.filter(f => f.played).slice(-5).reverse();
 
   return `
     <div class="card">
       <div class="section-title">${phase}</div>
+      ${ground ? `<div class="empty-note" style="padding:2px 0 0;text-align:left;">📍 Next up at ${ground}</div>` : ""}
       <div class="stat-grid" style="margin-top:10px;">
         ${ratingBar("Batting", p.bat)}
         ${ratingBar("Bowling", p.bowl)}
@@ -1053,53 +1141,79 @@ function renderHubOverview() {
 
 function fixtureRow(f, competitionLabel) {
   return `
-    <div class="match-line">
-      <span class="opp">vs ${f.opponent}<span class="season-tag" style="margin-left:8px;">${competitionLabel}</span></span>
+    <div class="match-line fixture-row">
+      <div class="opp">
+        <div>vs ${f.opponent}<span class="season-tag" style="margin-left:8px;">${competitionLabel}</span></div>
+        ${f.ground ? `<div class="ground-tag">📍 ${f.ground}</div>` : ""}
+      </div>
       <span class="res pending">UPCOMING</span>
     </div>
   `;
 }
 
-function renderHubFixtures() {
+function renderHubSidebar() {
   const p = state;
-  const domUpcoming = p.domesticDone ? [] : p.fixtures.slice(p.matchIndex);
+  const domUpcoming = p.domesticDone ? [] : p.fixtures.slice(p.matchIndex, p.matchIndex + 5);
   const franchiseUpcoming = (p.format !== "ALL_ROUND" || p.franchiseDone) ? [] : p.franchiseFixtures.slice(p.franchiseIndex);
   const intlUpcoming = (!p.selectedThisSeason || p.intlDone) ? [] : p.intlFixtures.slice(p.intlIndex);
   const domLabel = p.domesticKind === "FRANCHISE" ? "League" : "First-Class";
   const anyUpcoming = domUpcoming.length || franchiseUpcoming.length || intlUpcoming.length;
+  const tableLive = p.tournamentTable && p.bigEvent && p.bigEvent.active && p.selectedThisSeason && !p.intlDone;
 
   return `
+    ${tableLive ? renderTournamentTableCard(p.tournamentTable, p.bigEvent.name) : ""}
     <div class="card">
       <div class="section-title">Upcoming fixtures</div>
       <div style="margin-top:6px;">
-        ${!anyUpcoming ? `<div class="empty-note">Nothing scheduled right now — move on to the season summary.</div>` : ""}
+        ${!anyUpcoming ? `<div class="empty-note">Nothing scheduled right now.</div>` : ""}
         ${intlUpcoming.map(f => fixtureRow(f, f.tag || "International")).join("")}
         ${franchiseUpcoming.map(f => fixtureRow(f, "Franchise")).join("")}
         ${domUpcoming.map(f => fixtureRow(f, domLabel)).join("")}
       </div>
     </div>
-    <div class="empty-note">Future rounds (like international windows) only appear once the current competition wraps up.</div>
-  `;
-}
-
-function renderHubRankings() {
-  const p = state;
-  return `
     <div class="card">
-      <div class="section-title">ICC-style world rankings</div>
+      <div class="section-title">World rankings</div>
       <div class="stat-grid two" style="margin-top:10px;">
-        ${ratingBar("Batting rank", "#" + p.rankBat)}
-        ${ratingBar("Bowling rank", "#" + p.rankBowl)}
+        ${ratingBar("Batting", "#" + p.rankBat)}
+        ${ratingBar("Bowling", "#" + p.rankBowl)}
       </div>
-    </div>
-    <div class="card">
-      <div class="section-title">Reputation</div>
-      <div class="rating-bar-wrap" style="margin-top:10px;">
+      <div class="rating-bar-wrap" style="margin-top:12px;">
         <div class="rating-bar-track"><div class="rating-bar-fill" style="width:${p.reputation}%;"></div></div>
         <div class="rating-num">${Math.round(p.reputation)}</div>
       </div>
-      <div class="empty-note" style="padding:8px 0 0;">Reputation drives sponsor offers, captaincy chances and national selection.</div>
+      <div class="empty-note" style="padding:6px 0 0;">Reputation</div>
     </div>
+  `;
+}
+
+function renderTournamentTableCard(table, eventName) {
+  const p = state;
+  const sorted = table.slice().sort((a, b) => b.pts - a.pts || b.won - a.won);
+  return `
+    <div class="card">
+      <div class="section-title">${eventName} table</div>
+      <div class="table-wrap" style="margin-top:8px;">
+        <table class="mini-table">
+          <thead><tr><th>Nation</th><th>P</th><th>W</th><th>L</th><th>Pts</th></tr></thead>
+          <tbody>
+            ${sorted.map(r => `
+              <tr class="${r.nation === p.country ? "me-row" : ""}">
+                <td>${flagFor(r.nation)} ${r.nation}</td>
+                <td>${r.played}</td><td>${r.won}</td><td>${r.lost}</td><td><strong>${r.pts}</strong></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderHubCareer() {
+  const p = state;
+  const d = p.stats.domestic, i = p.stats.intl, fr = p.stats.franchise;
+  const arche = computeArchetype(p);
+  return `
     <div class="card">
       <div class="section-title">${p.country} national team</div>
       <div class="stat-grid two" style="margin-top:10px;">
@@ -1109,25 +1223,12 @@ function renderHubRankings() {
       <div class="empty-note" style="padding:8px 0 0;">Team trophies lean heavily on this rating — brilliance from you still matters, but a weaker side makes titles much harder to reach.</div>
     </div>
     <div class="card">
-      <div class="section-title">Leadership</div>
+      <div class="section-title">Leadership${p.sponsor ? " & sponsor" : ""}</div>
       <div class="empty-note" style="padding:6px 0;">
         ${p.isNationalCaptain ? `©️ National team captain` : p.isDomesticCaptain ? `©️ ${p.team} captain` : "No captaincy yet — keep performing and it'll come."}
       </div>
+      ${p.sponsor ? `<div class="trophy-item" style="margin-top:4px;"><span class="icon">🏷️</span>${p.sponsor.name}</div>` : ""}
     </div>
-    ${p.sponsor ? `
-      <div class="card">
-        <div class="section-title">Current sponsor</div>
-        <div class="trophy-item" style="margin-top:6px;"><span class="icon">🏷️</span>${p.sponsor.name}</div>
-      </div>
-    ` : ""}
-  `;
-}
-
-function renderHubCareer() {
-  const p = state;
-  const d = p.stats.domestic, i = p.stats.intl, fr = p.stats.franchise;
-  const arche = computeArchetype(p);
-  return `
     <div class="card">
       <div class="section-title">Domestic career (${p.team})</div>
       <div class="stat-grid" style="margin-top:10px;">
@@ -1220,6 +1321,25 @@ function renderBigEventIntro() {
   `);
 }
 
+function renderDebut(fmt) {
+  const p = state;
+  applyCurrentTheme(p);
+  const isFirstEver = p.caps.intl === 0;
+  const label = fmt === "TEST" ? "Test" : fmt === "ODI" ? "ODI" : "T20I";
+  screen(`
+    ${masthead()}
+    <div class="big-event-screen">
+      <div class="big-event-trophy">🎖️</div>
+      <div class="mode-tag">${isFirstEver ? "International debut" : `${label} debut`}</div>
+      <div class="big-event-title" style="font-size:30px;">${isFirstEver ? `${flagFor(p.country)} ${p.country} — Cap #1` : `${label} Cap #1`}</div>
+      <p style="color:var(--text-dim);max-width:380px;">${isFirstEver
+        ? `You're stepping out for ${p.country} for the very first time. A career milestone starts right here.`
+        : `Your first appearance in ${label} colours for ${p.country}.`}</p>
+      <button class="primary" style="max-width:280px;" onclick="App.confirmDebutAndPlay()">Take the field</button>
+    </div>
+  `);
+}
+
 /* ================= screens: match & summaries ================= */
 
 function renderMatchResult() {
@@ -1246,12 +1366,13 @@ function renderMatchResult() {
     ${masthead()}
     <div class="card">
       <div class="section-title" style="text-align:center;">${heading} vs ${r.opponent}</div>
+      ${r.ground ? `<div class="empty-note" style="padding:2px 0 0;">📍 ${r.ground}</div>` : ""}
       <div class="result-figures">
         <div class="big">${figureBig}</div>
         <div class="sub">${figureSub}</div>
       </div>
       <div class="badge" style="display:block;text-align:center;width:fit-content;margin:6px auto 0;background:${r.won ? "rgba(95,217,122,0.15)" : "rgba(232,93,117,0.15)"};color:${r.won ? "var(--accent)" : "var(--accent-3)"};">
-        Team ${r.won ? "won" : "lost"} the match
+        ${r.margin || (r.won ? "Won" : "Lost")}
       </div>
     </div>
     ${r.milestones.length ? `<div class="stack">${r.milestones.map(m => `<div class="milestone-banner">${m}</div>`).join("")}</div>` : ""}
@@ -1336,6 +1457,7 @@ function renderIntlSummary() {
       ${sum.trophy ? `<div class="milestone-banner" style="margin-top:12px;">🏆 ${sum.trophy.name}</div>` : ""}
       ${sum.award ? `<div class="milestone-banner" style="margin-top:12px;">🌟 ${sum.award}</div>` : ""}
     </div>
+    ${sum.finalTable ? renderTournamentTableCard(sum.finalTable, sum.eventName) : ""}
     <button class="primary" onclick="App.continueFromIntlSummary()">Continue</button>
   `);
 }
@@ -1513,6 +1635,7 @@ const App = {
     state = rec; currentSaveId = id;
     if (state.retired) renderRetirement();
     else if (state.lastMatchResult) renderMatchResult();
+    else if (state.debutPending) renderDebut(state.debutPending);
     else renderHub();
   },
   deleteSaveConfirm(id) { deleteSave(currentUser, id); renderSaveList(); },
@@ -1554,15 +1677,34 @@ const App = {
   simRestSeason() { simRestOfDomesticSeason(); App.afterDomesticDone(); },
   afterDomesticDone() {
     const p = state;
-    if (p.format === "ALL_ROUND") renderFranchiseSummary();
-    else if (p.selectedThisSeason) App.enterInternationalPhase();
-    else renderSeasonSummary();
+    // franchise stint fixtures are only generated once the domestic season ends — play those before summarizing them
+    if (p.format === "ALL_ROUND") {
+      if (!p.franchiseDone) return renderHub();
+      return renderFranchiseSummary();
+    }
+    if (p.selectedThisSeason) return App.enterInternationalPhase();
+    renderSeasonSummary();
   },
 
   playFranchise() { playFranchiseMatch(); renderMatchResult(); },
   simRestFranchise() { simRestOfFranchise(); renderFranchiseSummary(); },
 
-  playIntl() { playIntlMatch(); renderMatchResult(); },
+  playIntl() {
+    const p = state;
+    const fx = p.intlFixtures[p.intlIndex];
+    if (fx && (p.formatCaps[fx.fmt] || 0) === 0 && !p.debutPending) {
+      p.debutPending = fx.fmt;
+      save();
+      return renderDebut(fx.fmt);
+    }
+    playIntlMatch();
+    renderMatchResult();
+  },
+  confirmDebutAndPlay() {
+    state.debutPending = null;
+    playIntlMatch();
+    renderMatchResult();
+  },
   simRestIntl() { simRestOfIntl(); renderIntlSummary(); },
 
   enterInternationalPhase() {
@@ -1722,6 +1864,8 @@ function freshPlayer(d) {
     domesticDone: false, intlDone: false, franchiseDone: false,
     retired: false, forcedRetireOffer: false,
     caps: { domestic: 0, intl: 0, franchise: 0 },
+    formatCaps: { TEST: 0, ODI: 0, T20: 0 },
+    debutPending: null,
     stats: { domestic: emptyStatBlock(), intl: emptyStatBlock(), franchise: emptyStatBlock() },
     trophies: [], awards: [], seasonLog: [],
     pendingEvents: [], activeEvent: null,
@@ -1730,6 +1874,7 @@ function freshPlayer(d) {
     lastIntlSummary: null, lastFranchiseSummary: null,
     lastRatingDelta: { bat: 0, bowl: 0 },
     bigEvent: null,
+    tournamentTable: null,
     hubTab: "Overview",
   };
 }
