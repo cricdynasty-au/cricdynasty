@@ -935,18 +935,71 @@ const FAQ_ITEMS = [
 ];
 
 const BUYMEACOFFEE_URL = "https://buymeacoffee.com/cricdynasty";
+const FEEDBACK_EMAIL = "aj.vijayarajan@icloud.com";
+const FEEDBACK_FORM_ACTION = `https://formsubmit.co/${FEEDBACK_EMAIL}`;
+const SITE_URL = "https://cricdynasty-au.github.io/cricdynasty/";
+const FEEDBACK_REDIRECT_URL = `${SITE_URL}?feedback=sent`;
 
 function helpLinksRow() {
   return `
     <div class="help-links">
       <button class="secondary" onclick="App.goHowToPlay()">📖 How to Play</button>
       <button class="secondary" onclick="App.goFaq()">❓ FAQ</button>
+      <button class="secondary" onclick="App.goFeedback()">💬 Feedback &amp; Bugs</button>
       <a class="secondary coffee-link" href="${BUYMEACOFFEE_URL}" target="_blank" rel="noopener noreferrer">☕ Buy me a coffee</a>
     </div>
   `;
 }
 
 function helpBackTarget() { return currentUser ? "App.goSaveList()" : "App.goLogin()"; }
+
+function renderFeedback() {
+  applyTheme("default");
+  screen(`
+    ${masthead(`<button class="link-btn" onclick="App.returnFromFeedback()">‹ Back</button>`)}
+    <div class="hero" style="padding-top:8px;">
+      <div class="mode-tag">Get in touch</div>
+      <h1>Feedback &amp; Bugs</h1>
+      <p>Found a bug, or got an idea for the game? Send it through — it goes straight to the person building this.</p>
+    </div>
+    <form class="card stack" action="${FEEDBACK_FORM_ACTION}" method="POST">
+      <input type="hidden" name="_subject" value="CricDynasty feedback">
+      <input type="hidden" name="_captcha" value="false">
+      <input type="hidden" name="_template" value="table">
+      <input type="hidden" name="_next" value="${FEEDBACK_REDIRECT_URL}">
+      <label class="field">Your name (optional)
+        <input type="text" name="name" autocomplete="off" placeholder="Your name">
+      </label>
+      <label class="field">Your email (optional, if you'd like a reply)
+        <input type="email" name="email" autocomplete="off" placeholder="you@example.com">
+      </label>
+      <label class="field">Type
+        <select name="type">
+          <option value="Feedback">General feedback</option>
+          <option value="Bug report">Bug report</option>
+        </select>
+      </label>
+      <label class="field">Message
+        <textarea name="message" required rows="5" placeholder="What's on your mind?"></textarea>
+      </label>
+      <button class="primary" type="submit">Send</button>
+    </form>
+  `);
+}
+
+function renderFeedbackThanks() {
+  applyTheme("default");
+  screen(`
+    ${masthead()}
+    <div class="big-event-screen">
+      <div class="big-event-trophy">✅</div>
+      <div class="mode-tag">Feedback sent</div>
+      <div class="big-event-title" style="font-size:28px;">Thanks!</div>
+      <p style="color:var(--text-dim);max-width:380px;">Your message is on its way — I read every one and appreciate you taking the time.</p>
+      <button class="primary" style="max-width:280px;" onclick="App.continueAfterFeedback()">Continue</button>
+    </div>
+  `);
+}
 
 function renderHowToPlay() {
   applyTheme("default");
@@ -1139,7 +1192,7 @@ function renderHub() {
   const mainBody = p.hubTab === "Career" ? renderHubCareer() : renderHubOverview();
 
   screen(`
-    ${masthead()}
+    ${masthead(`<button class="link-btn" onclick="App.goFeedback()">💬 Feedback</button>`)}
     <div class="card player-card">
       <div class="player-avatar">${flagFor(p.country)}</div>
       <div>
@@ -1718,6 +1771,16 @@ const App = {
   goSaveList() { renderSaveList(); },
   goLogin() { renderLogin(); },
   goHowToPlay() { renderHowToPlay(); },
+  goFeedback() {
+    window.__feedbackFrom = (state && !state.retired) ? "hub" : (currentUser ? "saveList" : "login");
+    renderFeedback();
+  },
+  returnFromFeedback() {
+    if (window.__feedbackFrom === "hub" && state && !state.retired) return renderHub();
+    if (currentUser) return renderSaveList();
+    renderLogin();
+  },
+  continueAfterFeedback() { bootToStart(); },
   goFaq() { renderFaq(); },
   openSave(id) {
     const rec = savesForUser(currentUser).find(s => s.id === id);
@@ -1969,9 +2032,19 @@ function freshPlayer(d) {
   };
 }
 
-(function boot() {
+function bootToStart() {
   let lastUser = null;
   try { lastUser = localStorage.getItem(LAST_USER_KEY); } catch (e) {}
   if (lastUser) { currentUser = lastUser; renderSaveList(); }
   else renderLogin();
+}
+
+(function boot() {
+  const params = new URLSearchParams(location.search);
+  if (params.get("feedback") === "sent") {
+    try { history.replaceState({}, "", location.pathname); } catch (e) {}
+    renderFeedbackThanks();
+  } else {
+    bootToStart();
+  }
 })();

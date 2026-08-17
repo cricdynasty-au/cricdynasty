@@ -111,7 +111,7 @@ label.field {
   font-weight: 600;
 }
 
-input[type="text"], select {
+input[type="text"], input[type="email"], select, textarea {
   background: var(--bg-2);
   border: 1px solid var(--border);
   color: var(--text);
@@ -121,8 +121,9 @@ input[type="text"], select {
   outline: none;
   font-family: inherit;
 }
+textarea { resize: vertical; min-height: 90px; }
 
-input[type="text"]:focus, select:focus { border-color: var(--accent); }
+input[type="text"]:focus, input[type="email"]:focus, select:focus, textarea:focus { border-color: var(--accent); }
 
 .role-grid, .option-grid {
   display: grid;
@@ -201,19 +202,29 @@ a.coffee-link { border-color: color-mix(in srgb, var(--accent-2) 55%, var(--bord
   margin-top: 4px;
 }
 @media (min-width: 520px) {
-  .help-links { flex-direction: row; }
+  .help-links { flex-direction: row; flex-wrap: wrap; }
+  .help-links > * { flex: 1 1 45%; }
+}
+@media (min-width: 760px) {
   .help-links > * { flex: 1; }
 }
 
 button.link-btn {
-  background: none;
-  border: none;
-  color: var(--text-dim);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  color: var(--text);
   font-size: 13px;
+  font-weight: 800;
   cursor: pointer;
-  text-decoration: underline;
-  padding: 6px 0;
+  text-decoration: none;
+  padding: 8px 14px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: border-color .15s, color .15s, background .15s;
 }
+button.link-btn:hover { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--card-2)); }
 
 .row { display: flex; gap: 10px; }
 .row > * { flex: 1; }
