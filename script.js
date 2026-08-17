@@ -130,7 +130,7 @@ const SPONSOR_PERKS = [
 ];
 
 function sponsorTierFor(p) {
-  const eliteRank = Math.min(p.rankBat, p.rankBowl);
+  const eliteRank = (p.rankBat != null && p.rankBowl != null) ? Math.min(p.rankBat, p.rankBowl) : 999;
   const proven = p.trophies.length > 0 || p.awards.length > 0;
   if (p.reputation >= 78 && eliteRank <= 10 && proven) return 3;
   if (p.reputation >= 40 || (p.caps.domestic + p.caps.intl + p.caps.franchise) >= 20) return 2;
@@ -484,7 +484,7 @@ function buildFixtures(n, strengthRange, poolCountryTeams, excludeTeam) {
 function startSeason() {
   const p = state;
   const pool = teamPoolFor(p.country, p.domesticKind);
-  p.fixtures = buildFixtures(MATCHES_PER_SEASON, null, pool, p.team);
+  p.fixtures = buildFixtures(domesticMatchCountFor(p), null, pool, p.team);
   p.matchIndex = 0;
   p.seasonDomStats = emptyStatBlock();
   p.seasonIntlStats = emptyStatBlock();
@@ -863,10 +863,22 @@ function bowlingFormScore(p) {
 
 function updateRankings() {
   const p = state;
+  // world rankings are an international thing — nothing to rank until you've actually debuted
+  if (p.caps.intl <= 0) { p.rankBat = null; p.rankBowl = null; return; }
   const batPoints = clamp(p.bat * 0.65 + battingFormScore(p) * 1.0 + p.reputation * 0.15, 0, 220);
   const bowlPoints = clamp(p.bowl * 0.65 + bowlingFormScore(p) * 1.0 + p.reputation * 0.15, 0, 220);
   p.rankBat = clamp(101 - Math.round(batPoints / 2.1), 1, 100);
   p.rankBowl = clamp(101 - Math.round(bowlPoints / 2.1), 1, 100);
+}
+
+// established, well-regarded internationals get rested/rotated domestically — fewer state games as your caps and standing grow
+function domesticMatchCountFor(p) {
+  const caps = p.caps.intl;
+  const established = p.reputation >= 55;
+  if (established && caps >= 30) return 4;
+  if (established && caps >= 18) return 6;
+  if (established && caps >= 8) return 8;
+  return MATCHES_PER_SEASON;
 }
 
 function advanceToNextSeason() {
@@ -1313,10 +1325,14 @@ function renderHubSidebar() {
     </div>
     <div class="card">
       <div class="section-title">World rankings</div>
-      <div class="stat-grid two" style="margin-top:10px;">
-        ${ratingBar("Batting", "#" + p.rankBat)}
-        ${ratingBar("Bowling", "#" + p.rankBowl)}
-      </div>
+      ${p.caps.intl > 0 ? `
+        <div class="stat-grid two" style="margin-top:10px;">
+          ${ratingBar("Batting", "#" + p.rankBat)}
+          ${ratingBar("Bowling", "#" + p.rankBowl)}
+        </div>
+      ` : `
+        <div class="empty-note" style="padding:10px 0 0;">Unranked — world rankings only kick in once you've debuted internationally.</div>
+      `}
       <div class="rating-bar-wrap" style="margin-top:12px;">
         <div class="rating-bar-track"><div class="rating-bar-fill" style="width:${p.reputation}%;"></div></div>
         <div class="rating-num">${Math.round(p.reputation)}</div>
@@ -2007,7 +2023,7 @@ function freshPlayer(d) {
     teamStrength: clamp(Math.round(nationBaseline * 0.55) + randInt(-6, 6), 25, 95),
     isDomesticCaptain: false, isNationalCaptain: false,
     sponsor: null, sponsorHistory: [],
-    rankBat: 100, rankBowl: 100,
+    rankBat: null, rankBowl: null,
     season: 1,
     matchIndex: 0, fixtures: [],
     seasonDomStats: emptyStatBlock(), seasonIntlStats: emptyStatBlock(), seasonFranchiseStats: emptyStatBlock(),
