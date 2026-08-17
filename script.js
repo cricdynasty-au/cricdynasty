@@ -912,6 +912,58 @@ function teamPoolFor(country, kind) {
 
 /* ================= screens: accounts ================= */
 
+const HOW_TO_PLAY_STEPS = [
+  { icon: "📅", title: "Pick a format", body: "Long Format is first-class cricket leading to Test caps. Short Format signs you to a T20 franchise leading to T20I caps. All-Round does both, plus a mix of Test/ODI/T20I call-ups." },
+  { icon: "🏏", title: "Create your player", body: "Choose a country, role (Batsman, Bowler, All-rounder, Wicketkeeper-Batsman), batting hand, and bowling style. Stronger cricket nations start with tougher competition but a better shot at team trophies." },
+  { icon: "📆", title: "Play your season", body: "Work through your domestic (or franchise) fixtures one at a time, or sim the rest of the season in one go. Good form and reputation earn international call-ups." },
+  { icon: "✈️", title: "Represent your country", body: "Once selected, play your international window. Big events like World Cups and Test Championship Finals only open up once you've actually debuted in that format." },
+  { icon: "🎡", title: "Off-season", body: "Spin the wheel for a boost or setback, weigh up sponsorship offers and captaincy opportunities, then age into the next season." },
+  { icon: "🏆", title: "Build a legacy", body: "Play up to 20 seasons, chase trophies, caps and world rankings, then see your career tier and \"Played Like\" archetype when you retire." },
+];
+
+const FAQ_ITEMS = [
+  { q: "What's the difference between Long, Short, and All-Round formats?", a: "Long Format is first-class cricket leading to Test caps. Short Format signs you to a T20 franchise leading to T20I caps. All-Round does both, plus a mix of Test, ODI and T20I call-ups." },
+  { q: "How do I get picked for my national team?", a: "Selection chance is driven by your domestic/franchise form, your current rating, and your reputation. The better and more consistent you are, the more often you'll get picked." },
+  { q: "Why wasn't I picked for the World Cup or Test Championship Final?", a: "Big events require you to have already debuted internationally in that specific format — you can't headline a World Cup in a format you've never played. Reaching a Test Championship Final is also gated by your nation's overall strength, so weaker sides qualify less often." },
+  { q: "How do I become captain?", a: "Domestic captaincy is offered once you're experienced enough and your reputation is high enough. National captaincy follows once you're an established domestic captain with enough international caps and reputation." },
+  { q: "How do sponsorships work?", a: "You start out with rookie brands. Once your reputation and experience grow, established brands become available, and only once you're a genuinely proven star (top-10 world ranking, a trophy or award, high reputation) do elite brands come calling." },
+  { q: "Why is it so hard for a weaker cricket nation to win a World Cup?", a: "Team success leans heavily on your nation's overall rating, not just your personal stats. You can still shine individually, but dragging a weaker side to a title is realistically difficult — though upsets do occasionally happen." },
+  { q: "What does \"Played Like\" mean?", a: "It's a fun comparison of your career stats against common player archetypes (e.g. \"The Finisher\", \"The Metronome\") based on your average, strike rate, and role." },
+  { q: "Where are my saves stored?", a: "Locally in your browser, tied to the name you sign in with. Saves don't sync between devices or browsers, so use the same browser and name to pick up where you left off." },
+  { q: "Can I run more than one career at once?", a: "Yes — start as many dynasties as you like from the \"Your Dynasties\" screen, and switch between them any time." },
+  { q: "The wheel gave me a setback — is that unfair?", a: "Three of the four wheel outcomes are boosts, so it's usually in your favour, but the odd niggle or injury setback keeps every off-season interesting." },
+];
+
+function helpFooter() {
+  return `
+    <div class="section-title" style="margin-top:6px;">How to play</div>
+    <div class="card">
+      <div class="howto-list">
+        ${HOW_TO_PLAY_STEPS.map((s, i) => `
+          <div class="howto-step">
+            <div class="howto-icon">${s.icon}</div>
+            <div>
+              <div class="howto-title">${i + 1}. ${s.title}</div>
+              <div class="howto-body">${s.body}</div>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+    <div class="section-title" style="margin-top:6px;">FAQ</div>
+    <div class="card">
+      <div class="faq-list">
+        ${FAQ_ITEMS.map(f => `
+          <details class="faq-item">
+            <summary>${f.q}</summary>
+            <p>${f.a}</p>
+          </details>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderLogin() {
   applyTheme("default");
   screen(`
@@ -927,6 +979,7 @@ function renderLogin() {
       </label>
       <button class="primary" ${(window.__loginName || "").trim() ? "" : "disabled"} onclick="App.doLogin()">Continue</button>
     </div>
+    ${helpFooter()}
   `);
 }
 
@@ -953,6 +1006,7 @@ function renderSaveList() {
       `).join("")}
     </div>
     <button class="primary" onclick="App.goFormatSelect()">+ Start New Dynasty</button>
+    ${helpFooter()}
   `);
 }
 
