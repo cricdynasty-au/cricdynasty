@@ -934,9 +934,29 @@ const FAQ_ITEMS = [
   { q: "The wheel gave me a setback — is that unfair?", a: "Three of the four wheel outcomes are boosts, so it's usually in your favour, but the odd niggle or injury setback keeps every off-season interesting." },
 ];
 
-function helpFooter() {
+const BUYMEACOFFEE_URL = "https://buymeacoffee.com/cricdynasty";
+
+function helpLinksRow() {
   return `
-    <div class="section-title" style="margin-top:6px;">How to play</div>
+    <div class="help-links">
+      <button class="secondary" onclick="App.goHowToPlay()">📖 How to Play</button>
+      <button class="secondary" onclick="App.goFaq()">❓ FAQ</button>
+      <a class="secondary coffee-link" href="${BUYMEACOFFEE_URL}" target="_blank" rel="noopener noreferrer">☕ Buy me a coffee</a>
+    </div>
+  `;
+}
+
+function helpBackTarget() { return currentUser ? "App.goSaveList()" : "App.goLogin()"; }
+
+function renderHowToPlay() {
+  applyTheme("default");
+  screen(`
+    ${masthead(`<button class="link-btn" onclick="${helpBackTarget()}">‹ Back</button>`)}
+    <div class="hero" style="padding-top:8px;">
+      <div class="mode-tag">Guide</div>
+      <h1>How to Play</h1>
+      <p>The career loop, start to finish.</p>
+    </div>
     <div class="card">
       <div class="howto-list">
         ${HOW_TO_PLAY_STEPS.map((s, i) => `
@@ -950,7 +970,19 @@ function helpFooter() {
         `).join("")}
       </div>
     </div>
-    <div class="section-title" style="margin-top:6px;">FAQ</div>
+    <button class="secondary" onclick="App.goFaq()">❓ Read the FAQ instead</button>
+  `);
+}
+
+function renderFaq() {
+  applyTheme("default");
+  screen(`
+    ${masthead(`<button class="link-btn" onclick="${helpBackTarget()}">‹ Back</button>`)}
+    <div class="hero" style="padding-top:8px;">
+      <div class="mode-tag">Support</div>
+      <h1>FAQ</h1>
+      <p>Common questions about how the career sim works.</p>
+    </div>
     <div class="card">
       <div class="faq-list">
         ${FAQ_ITEMS.map(f => `
@@ -961,7 +993,8 @@ function helpFooter() {
         `).join("")}
       </div>
     </div>
-  `;
+    <button class="secondary" onclick="App.goHowToPlay()">📖 Read How to Play instead</button>
+  `);
 }
 
 function renderLogin() {
@@ -979,7 +1012,7 @@ function renderLogin() {
       </label>
       <button class="primary" ${(window.__loginName || "").trim() ? "" : "disabled"} onclick="App.doLogin()">Continue</button>
     </div>
-    ${helpFooter()}
+    ${helpLinksRow()}
   `);
 }
 
@@ -1006,7 +1039,7 @@ function renderSaveList() {
       `).join("")}
     </div>
     <button class="primary" onclick="App.goFormatSelect()">+ Start New Dynasty</button>
-    ${helpFooter()}
+    ${helpLinksRow()}
   `);
 }
 
@@ -1683,6 +1716,9 @@ const App = {
     renderSaveList();
   },
   goSaveList() { renderSaveList(); },
+  goLogin() { renderLogin(); },
+  goHowToPlay() { renderHowToPlay(); },
+  goFaq() { renderFaq(); },
   openSave(id) {
     const rec = savesForUser(currentUser).find(s => s.id === id);
     if (!rec || rec.version !== SAVE_VERSION) return;

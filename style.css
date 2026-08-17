@@ -177,6 +177,34 @@ button.secondary:hover { border-color: var(--accent); }
 button.secondary:disabled { opacity: 0.4; cursor: not-allowed; }
 button.secondary:disabled:hover { border-color: var(--border); }
 
+a.secondary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 13px 18px;
+  border-radius: 12px;
+  font-size: 14.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+a.secondary:hover { border-color: var(--accent); }
+a.coffee-link { border-color: color-mix(in srgb, var(--accent-2) 55%, var(--border)); color: var(--accent-2); }
+
+.help-links {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+@media (min-width: 520px) {
+  .help-links { flex-direction: row; }
+  .help-links > * { flex: 1; }
+}
+
 button.link-btn {
   background: none;
   border: none;
