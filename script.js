@@ -315,15 +315,41 @@ function simulateBowling(rating, oppStrength, fmt, approach) {
   return { bowled: true, overs, wickets, runsConceded };
 }
 
+const PITCH_TYPES = [
+  { key: "GREEN", label: "Green Seamer", icon: "🌱", desc: "Grass left on the surface — seam bowlers will fancy this early on.", battingMult: 0.9, paceMult: 1.18, spinMult: 0.9, rightCall: "BOWL" },
+  { key: "FLAT", label: "Flat Belter", icon: "🏏", desc: "A belter of a pitch — runs should flow all day.", battingMult: 1.15, paceMult: 0.9, spinMult: 0.9, rightCall: "BAT" },
+  { key: "TURNER", label: "Dry Turner", icon: "🏜️", desc: "Dry and cracked — expect sharp turn, especially late on.", battingMult: 0.92, paceMult: 0.9, spinMult: 1.22, rightCall: "BAT" },
+  { key: "BALANCED", label: "Balanced Track", icon: "⚖️", desc: "An even contest between bat and ball.", battingMult: 1.0, paceMult: 1.0, spinMult: 1.0, rightCall: null },
+];
+
+function matchConditionsFor(p) {
+  const toss = window.__matchToss;
+  if (!toss) return { battingMult: 1, bowlMult: 1 };
+  const pitch = toss.pitch;
+  const bowlTypeMult = p.bowlType === "Spin" ? pitch.spinMult : pitch.paceMult;
+  let correctness = 1;
+  if (toss.wonToss && pitch.rightCall) correctness = toss.decision === pitch.rightCall ? 1.06 : 0.94;
+  return { battingMult: pitch.battingMult * correctness, bowlMult: bowlTypeMult * correctness };
+}
+
+function tossNoteFor(toss) {
+  if (!toss || !toss.wonToss || !toss.pitch.rightCall) return null;
+  const correct = toss.decision === toss.pitch.rightCall;
+  return correct ? "📖 Good toss call — the conditions suited it." : "📖 Tricky call — the conditions didn't really favour that.";
+}
+
 function simulatePlayerPerformance(p, oppStrength, fmt) {
   const perf = {};
   const doesBat = p.role !== "Bowler" || Math.random() < 0.85;
   const doesBowl = p.role === "Bowler" || p.role === "All-rounder";
   const battingApproach = p.battingApproach || "Balanced";
   const bowlingApproach = p.bowlingApproach || "Balanced";
-  if (doesBat && p.role !== "Bowler") Object.assign(perf, simulateBatting(p.bat, oppStrength, fmt, battingApproach));
-  else if (doesBat) Object.assign(perf, simulateBatting(Math.max(p.bat, 8), oppStrength, fmt, "Balanced"));
-  if (doesBowl) Object.assign(perf, simulateBowling(p.bowl, oppStrength, fmt, bowlingApproach));
+  const cond = matchConditionsFor(p);
+  const batRating = p.bat * cond.battingMult;
+  const bowlRating = p.bowl * cond.bowlMult;
+  if (doesBat && p.role !== "Bowler") Object.assign(perf, simulateBatting(batRating, oppStrength, fmt, battingApproach));
+  else if (doesBat) Object.assign(perf, simulateBatting(Math.max(batRating, 8), oppStrength, fmt, "Balanced"));
+  if (doesBowl) Object.assign(perf, simulateBowling(bowlRating, oppStrength, fmt, bowlingApproach));
   return perf;
 }
 
@@ -522,12 +548,14 @@ function startSeason() {
 function playDomesticMatch() {
   const p = state;
   const fx = p.fixtures[p.matchIndex];
+  const tossNote = tossNoteFor(window.__matchToss);
   const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
+  window.__matchToss = null;
   const won = Math.random() < teamWinProbability(domesticTeamStrength(p), fx.oppStrength, perf);
   fx.played = true; fx.won = won;
   addStat(p.seasonDomStats, perf); addStat(p.stats.domestic, perf);
   p.caps.domestic += 1;
-  p.lastMatchResult = { kind: "domestic", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf) };
+  p.lastMatchResult = { kind: "domestic", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tossNote };
   p.matchIndex += 1;
   gainReputation(perf, won);
   if (p.matchIndex >= p.fixtures.length) finishDomesticSeason();
@@ -595,12 +623,14 @@ function startFranchiseStint() {
 function playFranchiseMatch() {
   const p = state;
   const fx = p.franchiseFixtures[p.franchiseIndex];
+  const tossNote = tossNoteFor(window.__matchToss);
   const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
+  window.__matchToss = null;
   const won = Math.random() < teamWinProbability(domesticTeamStrength(p) + 4, fx.oppStrength, perf);
   fx.played = true; fx.won = won;
   addStat(p.seasonFranchiseStats, perf); addStat(p.stats.franchise, perf);
   p.caps.franchise += 1;
-  p.lastMatchResult = { kind: "franchise", fmt: "FRANCHISE", opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf) };
+  p.lastMatchResult = { kind: "franchise", fmt: "FRANCHISE", opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tossNote };
   p.franchiseIndex += 1;
   gainReputation(perf, won);
   if (p.franchiseIndex >= p.franchiseFixtures.length) finishFranchiseStint();
@@ -694,13 +724,15 @@ function updateTournamentTable(opponentName, playerWon) {
 function playIntlMatch() {
   const p = state;
   const fx = p.intlFixtures[p.intlIndex];
+  const tossNote = tossNoteFor(window.__matchToss);
   const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
+  window.__matchToss = null;
   const won = Math.random() < teamWinProbability(intlTeamStrength(p), fx.oppStrength, perf);
   fx.played = true; fx.won = won;
   addStat(p.seasonIntlStats, perf); addStat(p.stats.intl, perf);
   p.caps.intl += 1;
   p.formatCaps[fx.fmt] = (p.formatCaps[fx.fmt] || 0) + 1;
-  p.lastMatchResult = { kind: "intl", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tag: fx.tag };
+  p.lastMatchResult = { kind: "intl", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tag: fx.tag, tossNote };
   p.intlIndex += 1;
   gainReputation(perf, won);
   updateTournamentTable(fx.opponent, won);
@@ -1328,12 +1360,32 @@ function renderMatchSetup(kind) {
   const heading = kind === "intl" ? (fx.tag || "International") : kind === "franchise" ? `Franchise · ${fmtLabel(fx.fmt)}` : `Domestic · ${fmtLabel(fx.fmt)}`;
   const battingApproach = p.battingApproach || "Balanced";
   const bowlingApproach = p.bowlingApproach || "Balanced";
+  const toss = window.__matchToss;
+  const tossReady = !toss || !toss.wonToss || !!toss.decision;
   screen(`
     ${masthead()}
     <div class="card">
       <div class="section-title" style="text-align:center;">${heading} vs ${fx.opponent}</div>
       ${fx.ground ? `<div class="empty-note" style="padding:2px 0 0;">📍 ${fx.ground}</div>` : ""}
     </div>
+    ${toss ? `
+      <div class="card">
+        <div class="section-title">Pitch report</div>
+        <div class="empty-note" style="padding:6px 0 0;text-align:left;">${toss.pitch.icon} <strong style="color:var(--text);">${toss.pitch.label}</strong> — ${toss.pitch.desc}</div>
+      </div>
+      <div class="card">
+        <div class="section-title">Toss</div>
+        ${toss.wonToss ? `
+          <div class="empty-note" style="padding:6px 0 8px;text-align:left;">You won the toss — what's the call?</div>
+          <div class="option-grid">
+            <div class="pill-btn ${toss.decision === "BAT" ? "selected" : ""}" onclick="App.setTossDecision('BAT')">🏏 Bat first</div>
+            <div class="pill-btn ${toss.decision === "BOWL" ? "selected" : ""}" onclick="App.setTossDecision('BOWL')">🎯 Bowl first</div>
+          </div>
+        ` : `
+          <div class="empty-note" style="padding:6px 0;text-align:left;">${fx.opponent} won the toss and chose to ${toss.oppDecision === "BAT" ? "bat" : "bowl"} first.</div>
+        `}
+      </div>
+    ` : ""}
     ${doesBat ? `
       <div class="card">
         <div class="section-title">Batting approach</div>
@@ -1357,7 +1409,7 @@ function renderMatchSetup(kind) {
       </div>
     ` : ""}
     <div class="card stack">
-      <button class="primary" onclick="App.confirmPlayMatch('${kind}')">🏏 Play match</button>
+      <button class="primary" ${tossReady ? "" : "disabled"} onclick="App.confirmPlayMatch('${kind}')">🏏 Play match</button>
       <button class="secondary" onclick="App.goHub()">‹ Back</button>
     </div>
   `);
@@ -1700,6 +1752,7 @@ function renderMatchResult() {
       </div>
     </div>
     ${r.milestones.length ? `<div class="stack">${r.milestones.map(m => `<div class="milestone-banner">${m}</div>`).join("")}</div>` : ""}
+    ${r.tossNote ? `<div class="empty-note">${r.tossNote}</div>` : ""}
     <button class="primary" onclick="App.continueFromMatch()">Continue</button>
   `);
 }
@@ -2037,10 +2090,21 @@ const App = {
 
   goHub() { renderHub(); },
 
-  goMatchSetup(kind) { window.__matchSetupKind = kind; renderMatchSetup(kind); },
+  goMatchSetup(kind) {
+    window.__matchSetupKind = kind;
+    if (!window.__matchToss) {
+      const pitch = choice(PITCH_TYPES);
+      const wonToss = Math.random() < 0.5;
+      window.__matchToss = { pitch, wonToss, decision: null, oppDecision: wonToss ? null : choice(["BAT", "BOWL"]) };
+    }
+    renderMatchSetup(kind);
+  },
+  setTossDecision(d) { window.__matchToss.decision = d; renderMatchSetup(window.__matchSetupKind); },
   setBattingApproach(k) { state.battingApproach = k; save(); renderMatchSetup(window.__matchSetupKind); },
   setBowlingApproach(k) { state.bowlingApproach = k; save(); renderMatchSetup(window.__matchSetupKind); },
   confirmPlayMatch(kind) {
+    const toss = window.__matchToss;
+    if (toss && toss.wonToss && !toss.decision) return;
     if (kind === "domestic") return App.playMatch();
     if (kind === "franchise") return App.playFranchise();
     return App.playIntl();
