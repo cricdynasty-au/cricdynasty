@@ -269,35 +269,48 @@ const BATTING_MEAN = {
 
 /* ================= simulation ================= */
 
-function simulateBatting(rating, oppStrength, fmt) {
+const BATTING_APPROACHES = {
+  Cautious: { meanMult: 0.82, outAdj: -0.09, srMult: 0.84, label: "Cautious", desc: "Occupy the crease, sacrifice tempo for your wicket." },
+  Balanced: { meanMult: 1.0, outAdj: 0, srMult: 1.0, label: "Balanced", desc: "Play each ball on its merits." },
+  Aggressive: { meanMult: 1.24, outAdj: 0.1, srMult: 1.22, label: "Aggressive", desc: "Take the attack to the bowlers — higher ceiling, higher risk." },
+};
+const BOWLING_APPROACHES = {
+  Contain: { wicketMult: 0.72, econAdj: -1.15, label: "Contain", desc: "Bowl tight lines, dry up the runs." },
+  Balanced: { wicketMult: 1.0, econAdj: 0, label: "Balanced", desc: "Mix it up and take what comes." },
+  Attack: { wicketMult: 1.32, econAdj: 1.2, label: "Attack", desc: "Bowl for wickets — more threat, more boundaries conceded." },
+};
+
+function simulateBatting(rating, oppStrength, fmt, approach) {
   const cfg = BATTING_MEAN[fmt] || BATTING_MEAN.T20;
+  const app = BATTING_APPROACHES[approach] || BATTING_APPROACHES.Balanced;
   const longFmt = fmt === "TEST" || fmt === "FC";
   const form = randInt(-8, 8);
   const effective = clamp(rating + form - (oppStrength - 50) / 4, 1, 99);
-  const mean = clamp(cfg.base + effective * cfg.slope, 3, 70);
+  const mean = clamp((cfg.base + effective * cfg.slope) * app.meanMult, 3, 85);
   const runs = clamp(Math.round(-Math.log(Math.random()) * mean), 0, Math.round(mean * 3.4));
   const outBase = longFmt ? 0.84 : fmt === "ODI" ? 0.77 : 0.8;
-  const outChance = clamp(outBase - effective / 900, 0.55, 0.92);
+  const outChance = clamp(outBase - effective / 900 + app.outAdj, 0.35, 0.95);
   const out = Math.random() < outChance;
-  const sr = cfg.sr * rand(0.78, 1.22);
+  const sr = cfg.sr * app.srMult * rand(0.78, 1.22);
   const balls = Math.max(1, Math.round((runs / sr) * 100));
   const fours = clamp(Math.round((runs * rand(0.12, 0.28)) / 4), 0, 20);
   const sixes = clamp(Math.round((runs * rand(0.02, 0.12)) / 6), 0, 10);
   return { batted: true, runs, balls: Math.max(balls, fours * 4 + sixes * 6), fours, sixes, out };
 }
 
-function simulateBowling(rating, oppStrength, fmt) {
+function simulateBowling(rating, oppStrength, fmt, approach) {
   const scale = FORMAT_SCALE[fmt] || FORMAT_SCALE.T20;
+  const app = BOWLING_APPROACHES[approach] || BOWLING_APPROACHES.Balanced;
   const longFmt = fmt === "TEST" || fmt === "FC";
   const form = randInt(-10, 10);
   const effective = clamp(rating + form - (oppStrength - 50) / 3, 1, 99);
   const overs = scale.overs;
-  const perOverWicketChance = clamp(effective / (longFmt ? 340 : 240), 0.02, 0.42);
+  const perOverWicketChance = clamp((effective / (longFmt ? 340 : 240)) * app.wicketMult, 0.01, 0.5);
   let wickets = 0;
   for (let i = 0; i < overs; i++) if (Math.random() < perOverWicketChance) wickets++;
   wickets = clamp(wickets, 0, longFmt ? 8 : 5);
   const economyBase = longFmt ? 3.6 : fmt === "ODI" ? 5.6 : 11.5;
-  const economy = clamp(economyBase - effective / (longFmt ? 24 : 13) + rand(-1.4, 1.4), 1.6, 15);
+  const economy = clamp(economyBase - effective / (longFmt ? 24 : 13) + app.econAdj + rand(-1.4, 1.4), 1.2, 17);
   const runsConceded = Math.max(0, Math.round(economy * overs));
   return { bowled: true, overs, wickets, runsConceded };
 }
@@ -306,9 +319,11 @@ function simulatePlayerPerformance(p, oppStrength, fmt) {
   const perf = {};
   const doesBat = p.role !== "Bowler" || Math.random() < 0.85;
   const doesBowl = p.role === "Bowler" || p.role === "All-rounder";
-  if (doesBat && p.role !== "Bowler") Object.assign(perf, simulateBatting(p.bat, oppStrength, fmt));
-  else if (doesBat) Object.assign(perf, simulateBatting(Math.max(p.bat, 8), oppStrength, fmt));
-  if (doesBowl) Object.assign(perf, simulateBowling(p.bowl, oppStrength, fmt));
+  const battingApproach = p.battingApproach || "Balanced";
+  const bowlingApproach = p.bowlingApproach || "Balanced";
+  if (doesBat && p.role !== "Bowler") Object.assign(perf, simulateBatting(p.bat, oppStrength, fmt, battingApproach));
+  else if (doesBat) Object.assign(perf, simulateBatting(Math.max(p.bat, 8), oppStrength, fmt, "Balanced"));
+  if (doesBowl) Object.assign(perf, simulateBowling(p.bowl, oppStrength, fmt, bowlingApproach));
   return perf;
 }
 
@@ -772,6 +787,8 @@ function checkForCareerEvents() {
   p.pendingEvents = [];
   const sponsorDue = p.season === 2 || (p.season > 2 && (p.season - 2) % 4 === 0);
   if (sponsorDue) p.pendingEvents.push({ type: "sponsor" });
+  const transferDue = p.season >= 3 && p.season % 3 === 0 && p.age < 34;
+  if (transferDue) p.pendingEvents.push({ type: "transfer" });
   if (!p.isDomesticCaptain && p.age >= 23 && p.reputation >= 45 && p.season >= 3) {
     p.pendingEvents.push({ type: "captainDomestic" });
   }
@@ -1195,6 +1212,157 @@ function renderCreate() {
   `);
 }
 
+/* ================= club offers (creation + transfer window) ================= */
+
+function generateClubOffers(country, kind, excludeTeam, n) {
+  const pool = teamPoolFor(country, kind).filter(t => t !== excludeTeam);
+  const picks = pickN(pool, Math.min(n || 3, pool.length));
+  return picks.map(team => {
+    const mod = randInt(-10, 10);
+    let tag, desc;
+    if (mod >= 6) { tag = "Title Contenders"; desc = "A stacked squad with real expectations — harder to force your way in, bigger trophies if you do."; }
+    else if (mod <= -6) { tag = "Rebuilding Project"; desc = "A young side short on depth — an easier path to a regular starting spot and captaincy, but titles will take longer."; }
+    else { tag = "Established Mid-Table Side"; desc = "A steady, competitive outfit with no fixed pecking order."; }
+    return { team, mod, tag, desc };
+  });
+}
+
+function renderClubChoice() {
+  applyTheme(draft.country);
+  const kind = draft.format === "SHORT" ? "FRANCHISE" : "FC";
+  const label = kind === "FRANCHISE" ? "franchise" : "domestic side";
+  const offers = window.__clubOffers;
+  screen(`
+    ${masthead()}
+    <div class="hero" style="padding-top:8px;">
+      <div class="mode-tag">Sign your first contract</div>
+      <h1>Choose your ${label}</h1>
+      <p>Three clubs want you. Where you sign shapes your early career.</p>
+    </div>
+    <div class="stack">
+      ${offers.map((o, idx) => `
+        <div class="format-card" onclick="App.pickClub(${idx})">
+          <div class="format-icon">🏟️</div>
+          <div>
+            <div class="format-title">${o.team} <span class="badge" style="margin-left:6px;">${o.tag}</span></div>
+            <div class="format-desc">${o.desc}</div>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `);
+}
+
+function renderFranchiseChoice() {
+  applyTheme(draft.country);
+  const offers = window.__franchiseOffers;
+  screen(`
+    ${masthead()}
+    <div class="hero" style="padding-top:8px;">
+      <div class="mode-tag">And on the side...</div>
+      <h1>Choose your T20 franchise</h1>
+      <p>You'll turn out here during the franchise window each season, alongside your first-class cricket.</p>
+    </div>
+    <div class="stack">
+      ${offers.map((o, idx) => `
+        <div class="format-card" onclick="App.pickFranchise(${idx})">
+          <div class="format-icon">⚡</div>
+          <div>
+            <div class="format-title">${o.team} <span class="badge" style="margin-left:6px;">${o.tag}</span></div>
+            <div class="format-desc">${o.desc}</div>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `);
+}
+
+function renderTransferWindow() {
+  const p = state;
+  applyTheme(p.country);
+  const offers = window.__transferOffers;
+  screen(`
+    ${masthead()}
+    <div class="hero" style="padding-top:8px;">
+      <div class="mode-tag">Transfer window</div>
+      <h1>Stay or move on?</h1>
+      <p>Your contract at ${p.team} is up for review, and a couple of rivals have come calling.</p>
+    </div>
+    <div class="stack">
+      <div class="format-card" onclick="App.stayAtClub()">
+        <div class="format-icon">🏠</div>
+        <div>
+          <div class="format-title">Stay at ${p.team}${p.isDomesticCaptain ? " — keep the captaincy" : ""}</div>
+          <div class="format-desc">Familiar surroundings, no disruption to your role.</div>
+        </div>
+      </div>
+      ${offers.map((o, idx) => `
+        <div class="format-card" onclick="App.acceptTransfer(${idx})">
+          <div class="format-icon">🏟️</div>
+          <div>
+            <div class="format-title">Join ${o.team} <span class="badge" style="margin-left:6px;">${o.tag}</span></div>
+            <div class="format-desc">${o.desc}${p.isDomesticCaptain ? " You'd give up the captaincy and have to earn it again." : ""}</div>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `);
+}
+
+/* ================= screens: match setup ================= */
+
+function currentFixtureFor(kind) {
+  const p = state;
+  if (kind === "domestic") return p.fixtures[p.matchIndex];
+  if (kind === "franchise") return p.franchiseFixtures[p.franchiseIndex];
+  return p.intlFixtures[p.intlIndex];
+}
+
+function renderMatchSetup(kind) {
+  const p = state;
+  applyCurrentTheme(p);
+  const fx = currentFixtureFor(kind);
+  if (!fx) return renderHub();
+  const doesBat = p.role !== "Bowler";
+  const doesBowl = p.role === "Bowler" || p.role === "All-rounder";
+  const heading = kind === "intl" ? (fx.tag || "International") : kind === "franchise" ? `Franchise · ${fmtLabel(fx.fmt)}` : `Domestic · ${fmtLabel(fx.fmt)}`;
+  const battingApproach = p.battingApproach || "Balanced";
+  const bowlingApproach = p.bowlingApproach || "Balanced";
+  screen(`
+    ${masthead()}
+    <div class="card">
+      <div class="section-title" style="text-align:center;">${heading} vs ${fx.opponent}</div>
+      ${fx.ground ? `<div class="empty-note" style="padding:2px 0 0;">📍 ${fx.ground}</div>` : ""}
+    </div>
+    ${doesBat ? `
+      <div class="card">
+        <div class="section-title">Batting approach</div>
+        <div class="option-grid-3" style="margin-top:8px;">
+          ${Object.keys(BATTING_APPROACHES).map(k => `
+            <div class="pill-btn ${battingApproach === k ? "selected" : ""}" onclick="App.setBattingApproach('${k}')" style="font-size:12px;">${k}</div>
+          `).join("")}
+        </div>
+        <div class="empty-note" style="padding:6px 0 0;text-align:left;">${BATTING_APPROACHES[battingApproach].desc}</div>
+      </div>
+    ` : ""}
+    ${doesBowl ? `
+      <div class="card">
+        <div class="section-title">Bowling approach</div>
+        <div class="option-grid-3" style="margin-top:8px;">
+          ${Object.keys(BOWLING_APPROACHES).map(k => `
+            <div class="pill-btn ${bowlingApproach === k ? "selected" : ""}" onclick="App.setBowlingApproach('${k}')" style="font-size:12px;">${k}</div>
+          `).join("")}
+        </div>
+        <div class="empty-note" style="padding:6px 0 0;text-align:left;">${BOWLING_APPROACHES[bowlingApproach].desc}</div>
+      </div>
+    ` : ""}
+    <div class="card stack">
+      <button class="primary" onclick="App.confirmPlayMatch('${kind}')">🏏 Play match</button>
+      <button class="secondary" onclick="App.goHub()">‹ Back</button>
+    </div>
+  `);
+}
+
 /* ================= screens: hub ================= */
 
 function renderHub() {
@@ -1240,20 +1408,20 @@ function renderHubOverview() {
     const label = p.domesticKind === "FRANCHISE" ? "Franchise league" : "First-class match";
     phase = `Season ${p.season}/${MAX_SEASONS} · ${calendarWindowFor(p)} · ${label} ${p.matchIndex + 1}/${p.fixtures.length}`;
     actionButtons = `
-      <button class="primary" onclick="App.playMatch()">🏏 Play next match</button>
+      <button class="primary" onclick="App.goMatchSetup('domestic')">🏏 Set approach &amp; play</button>
       <button class="secondary" onclick="App.simRestSeason()">⏩ Sim rest of season</button>
     `;
   } else if (!p.franchiseDone) {
     phase = `Season ${p.season}/${MAX_SEASONS} · Franchise stint (${p.franchiseTeam}) ${p.franchiseIndex + 1}/${p.franchiseFixtures.length}`;
     actionButtons = `
-      <button class="primary" onclick="App.playFranchise()">⚡ Play next franchise match</button>
+      <button class="primary" onclick="App.goMatchSetup('franchise')">⚡ Set approach &amp; play</button>
       <button class="secondary" onclick="App.simRestFranchise()">⏩ Sim rest of stint</button>
     `;
   } else if (p.selectedThisSeason && !p.intlDone) {
     const tag = p.intlFixtures[0] ? p.intlFixtures[0].tag : "Series";
     phase = `Season ${p.season}/${MAX_SEASONS} · ${tag} ${p.intlIndex + 1}/${p.intlFixtures.length}`;
     actionButtons = `
-      <button class="primary" onclick="App.playIntl()">✈️ Play next international</button>
+      <button class="primary" onclick="App.goMatchSetup('intl')">✈️ Set approach &amp; play</button>
       <button class="secondary" onclick="App.simRestIntl()">⏩ Sim rest of window</button>
     `;
   } else {
@@ -1827,7 +1995,32 @@ const App = {
 
   confirmCreate() {
     if (!draft.name.trim()) return;
+    const kind = draft.format === "SHORT" ? "FRANCHISE" : "FC";
+    window.__clubOffers = generateClubOffers(draft.country, kind, null, 3);
+    renderClubChoice();
+  },
+  pickClub(idx) {
+    window.__chosenClub = window.__clubOffers[idx];
+    window.__clubOffers = null;
+    if (draft.format === "ALL_ROUND") {
+      window.__franchiseOffers = generateClubOffers(draft.country, "FRANCHISE", window.__chosenClub.team, 3);
+      return renderFranchiseChoice();
+    }
+    App.finalizeCreate();
+  },
+  pickFranchise(idx) {
+    window.__chosenFranchise = window.__franchiseOffers[idx];
+    window.__franchiseOffers = null;
+    App.finalizeCreate();
+  },
+  finalizeCreate() {
     state = freshPlayer({ ...draft, name: draft.name.trim() });
+    const nationBaseline = NATION_STRENGTH[state.country] || 70;
+    state.team = window.__chosenClub.team;
+    state.teamStrength = clamp(Math.round(nationBaseline * 0.55) + window.__chosenClub.mod, 15, 99);
+    if (state.format === "ALL_ROUND") state.franchiseTeam = window.__chosenFranchise.team;
+    else if (state.format === "SHORT") state.franchiseTeam = state.team;
+    window.__chosenClub = null; window.__chosenFranchise = null;
     currentSaveId = "save_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
     startSeason();
     renderHub();
@@ -1840,6 +2033,30 @@ const App = {
     if (!state.franchiseDone) return renderFranchiseSummary();
     if (state.selectedThisSeason && !state.intlDone) return renderHub();
     renderSeasonSummary();
+  },
+
+  goHub() { renderHub(); },
+
+  goMatchSetup(kind) { window.__matchSetupKind = kind; renderMatchSetup(kind); },
+  setBattingApproach(k) { state.battingApproach = k; save(); renderMatchSetup(window.__matchSetupKind); },
+  setBowlingApproach(k) { state.bowlingApproach = k; save(); renderMatchSetup(window.__matchSetupKind); },
+  confirmPlayMatch(kind) {
+    if (kind === "domestic") return App.playMatch();
+    if (kind === "franchise") return App.playFranchise();
+    return App.playIntl();
+  },
+
+  stayAtClub() { window.__transferOffers = null; App.advanceEventQueue(); },
+  acceptTransfer(idx) {
+    const p = state;
+    const o = window.__transferOffers[idx];
+    const nationBaseline = NATION_STRENGTH[p.country] || 70;
+    p.team = o.team;
+    p.teamStrength = clamp(Math.round(nationBaseline * 0.55) + o.mod, 15, 99);
+    if (p.isDomesticCaptain) p.isDomesticCaptain = false;
+    window.__transferOffers = null;
+    save();
+    App.advanceEventQueue();
   },
 
   playMatch() { playDomesticMatch(); renderMatchResult(); },
@@ -1922,6 +2139,10 @@ const App = {
     const ev = nextPendingEvent();
     if (!ev) return App.goToWheel();
     if (ev.type === "sponsor") return renderSponsorOffer();
+    if (ev.type === "transfer") {
+      window.__transferOffers = generateClubOffers(state.country, state.domesticKind, state.team, 2);
+      return renderTransferWindow();
+    }
     if (ev.type === "captainDomestic") return renderCaptaincyOffer("captainDomestic");
     if (ev.type === "captainNational") return renderCaptaincyOffer("captainNational");
     App.advanceEventQueue();
@@ -2022,6 +2243,7 @@ function freshPlayer(d) {
     reputation: Math.round(clamp(potential / 4 + rand(-5, 5), 10, 40)),
     teamStrength: clamp(Math.round(nationBaseline * 0.55) + randInt(-6, 6), 25, 95),
     isDomesticCaptain: false, isNationalCaptain: false,
+    battingApproach: "Balanced", bowlingApproach: "Balanced",
     sponsor: null, sponsorHistory: [],
     rankBat: null, rankBowl: null,
     season: 1,

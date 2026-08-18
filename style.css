@@ -130,6 +130,11 @@ input[type="text"]:focus, input[type="email"]:focus, select:focus, textarea:focu
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
+.option-grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
 
 .pill-btn {
   background: var(--bg-2);
