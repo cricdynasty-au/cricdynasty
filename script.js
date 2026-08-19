@@ -327,17 +327,29 @@ function battingPhaseName(fmt, index) { return (BATTING_PHASE_NAMES[fmt] || BATT
 
 // one third of an innings — used by the live, phase-by-phase play flow
 function simulateBattingPhase(effRating, oppStrength, fmt, approach) {
-  const cfg = BATTING_MEAN[fmt] || BATTING_MEAN.T20;
   const app = BATTING_APPROACHES[approach] || BATTING_APPROACHES.Balanced;
   const longFmt = fmt === "TEST" || fmt === "FC";
   const form = randInt(-8, 8);
   const effective = clamp(effRating + form - (oppStrength - 50) / 4, 1, 99);
-  const fullMean = clamp((cfg.base + effective * cfg.slope) * app.meanMult, 3, 85);
-  const phaseMean = fullMean / LIVE_PHASES;
-  const runs = clamp(Math.round(-Math.log(Math.random()) * phaseMean), 0, Math.round(phaseMean * 4.6));
   const outBase = longFmt ? 0.84 : fmt === "ODI" ? 0.77 : 0.8;
   const perPhaseOut = clamp((outBase - effective / 900 + app.outAdj) * 0.46, 0.05, 0.55);
   const out = Math.random() < perPhaseOut;
+
+  if (longFmt) {
+    // a session means real time at the crease, whatever the scoring rate — balls come first, runs follow
+    const balls = randInt(35, 85);
+    const baseSR = clamp(28 + effective * 0.35, 20, 75) * app.srMult;
+    const sr = baseSR * rand(0.72, 1.28);
+    const runs = Math.max(0, Math.round((balls * sr) / 100));
+    const fours = clamp(Math.round((runs * rand(0.1, 0.22)) / 4), 0, 12);
+    const sixes = clamp(Math.round((runs * rand(0, 0.04)) / 6), 0, 3);
+    return { runs, balls: Math.max(balls, fours * 4 + sixes * 6), fours, sixes, out };
+  }
+
+  const cfg = BATTING_MEAN[fmt] || BATTING_MEAN.T20;
+  const fullMean = clamp((cfg.base + effective * cfg.slope) * app.meanMult, 3, 85);
+  const phaseMean = fullMean / LIVE_PHASES;
+  const runs = clamp(Math.round(-Math.log(Math.random()) * phaseMean), 0, Math.round(phaseMean * 4.6));
   const sr = cfg.sr * app.srMult * rand(0.78, 1.22);
   const balls = Math.max(1, Math.round((runs / sr) * 100));
   const fours = clamp(Math.round((runs * rand(0.12, 0.28)) / 4), 0, 10);
