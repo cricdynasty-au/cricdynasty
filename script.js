@@ -146,7 +146,7 @@ const WHEEL_SEGMENTS = [
 
 const DB_KEY = "cricDynastyDB";
 const LAST_USER_KEY = "cricDynastyLastUser";
-const SAVE_VERSION = 4;
+const SAVE_VERSION = 5;
 
 const MAX_SEASONS = 20;
 const MATCHES_PER_SEASON = 10;
@@ -474,7 +474,7 @@ function matchMarginText(won, fmt) {
 /* ================= archetypes ("played like") ================= */
 
 function computeArchetype(p) {
-  const d = combineStats(p.stats.domestic, p.stats.intl, p.stats.franchise);
+  const d = combineStats(p.stats.domestic, p.stats.intl, p.stats.franchise, p.stats.overseas);
   const avg = d.outs ? d.runs / d.outs : d.runs;
   const sr = d.balls ? (d.runs / d.balls) * 100 : 0;
   const wpm = d.matches ? d.wickets / d.matches : 0;
@@ -603,12 +603,14 @@ function startSeason() {
   p.seasonDomStats = emptyStatBlock();
   p.seasonIntlStats = emptyStatBlock();
   p.seasonFranchiseStats = emptyStatBlock();
+  p.seasonOverseasStats = emptyStatBlock();
   p.domesticDone = false; p.intlDone = false; p.franchiseDone = p.format !== "ALL_ROUND";
+  p.overseasPending = false; p.overseasDone = true; p.overseasOffer = null;
   p.selectedThisSeason = false;
   p.intlFixtures = []; p.intlIndex = 0;
   p.franchiseFixtures = []; p.franchiseIndex = 0;
   p.lastMatchResult = null; p.lastLeagueFinish = null; p.lastSeasonSummary = null;
-  p.lastIntlSummary = null; p.lastFranchiseSummary = null;
+  p.lastIntlSummary = null; p.lastFranchiseSummary = null; p.lastOverseasSummary = null;
   p.bigEvent = bigEventInfo(p);
   p.tournamentTable = null;
   p.wheelResult = null;
@@ -681,8 +683,58 @@ function finishDomesticSeason() {
   p.lastSeasonSummary = { stats: { ...s }, finish, champion, award };
 
   if (p.format === "ALL_ROUND") startFranchiseStint();
-  else { p.franchiseDone = true; decideInternationalSelection(); }
+  else { p.franchiseDone = true; setupOverseasPhase(); }
   save();
+}
+
+const OVERSEAS_LEAGUE_NAME = {
+  "India": "IPL", "Australia": "BBL", "England": "The Hundred", "Pakistan": "PSL",
+  "South Africa": "SA20", "West Indies": "CPL", "New Zealand": "Super Smash",
+  "Sri Lanka": "LPL", "Bangladesh": "BPL", "Afghanistan": "Shpageeza League",
+};
+
+// established franchise players get scouted by other T20 leagues around the world — a fun, lower-stakes side stint
+function setupOverseasPhase() {
+  const p = state;
+  const eligible = (p.format === "SHORT" || p.format === "ALL_ROUND") && p.reputation >= 45;
+  const triggered = eligible && Math.random() < 0.55;
+  if (triggered) {
+    const leagueCountry = choice(COUNTRIES.map(c => c.name).filter(n => n !== p.country && T20_FRANCHISES[n]));
+    const team = choice(T20_FRANCHISES[leagueCountry]);
+    p.overseasOffer = { team, country: leagueCountry, league: OVERSEAS_LEAGUE_NAME[leagueCountry] || `${leagueCountry} League` };
+    p.overseasPending = true;
+    p.overseasDone = false;
+    save();
+  } else {
+    p.overseasOffer = null;
+    p.overseasPending = false;
+    p.overseasDone = true;
+    decideInternationalSelection();
+  }
+}
+
+function playOverseasStint() {
+  const p = state;
+  const offer = p.overseasOffer;
+  const pool = T20_FRANCHISES[offer.country].filter(t => t !== offer.team);
+  const fixtures = pickN(pool, Math.min(4, pool.length)).map(opp => ({ opponent: opp, oppStrength: randInt(45, 78), fmt: "FRANCHISE", ground: groundFor(offer.country) }));
+  fixtures.forEach(fx => {
+    const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
+    const won = Math.random() < teamWinProbability(domesticTeamStrength(p) + 2, fx.oppStrength, perf);
+    addStat(p.seasonOverseasStats, perf); addStat(p.stats.overseas, perf);
+    p.caps.overseas = (p.caps.overseas || 0) + 1;
+    gainReputation(perf, won);
+  });
+  p.overseasDone = true;
+  p.lastOverseasSummary = { stats: { ...p.seasonOverseasStats }, team: offer.team, league: offer.league, country: offer.country };
+  p.franchiseHistory.push({ season: p.season, team: offer.team, country: offer.country, league: offer.league });
+  save();
+  decideInternationalSelection();
+}
+
+function proceedAfterOverseas() {
+  if (state.selectedThisSeason && !state.intlDone) return App.enterInternationalPhase();
+  renderSeasonSummary();
 }
 
 function startFranchiseStint() {
@@ -731,7 +783,7 @@ function finishFranchiseStint() {
   const p = state;
   p.franchiseDone = true;
   p.lastFranchiseSummary = { stats: { ...p.seasonFranchiseStats } };
-  decideInternationalSelection();
+  setupOverseasPhase();
 }
 
 function decideInternationalSelection() {
@@ -957,8 +1009,8 @@ function ageAndProgress() {
   updateRankings();
 
   p.seasonLog.push({
-    season: p.season, age: p.age,
-    dom: { ...p.seasonDomStats }, intl: { ...p.seasonIntlStats }, franchise: { ...p.seasonFranchiseStats },
+    season: p.season, age: p.age, team: p.team,
+    dom: { ...p.seasonDomStats }, intl: { ...p.seasonIntlStats }, franchise: { ...p.seasonFranchiseStats }, overseas: { ...p.seasonOverseasStats },
     champion: p.lastLeagueFinish ? p.lastLeagueFinish.champion : false,
   });
 
@@ -969,7 +1021,7 @@ function ageAndProgress() {
 function battingFormScore(p) {
   const recent = p.seasonLog.slice(-2);
   if (!recent.length) return 0;
-  const combined = recent.map(s => combineStats(s.dom, s.intl, s.franchise));
+  const combined = recent.map(s => combineStats(s.dom, s.intl, s.franchise, s.overseas));
   const runs = combined.reduce((a, s) => a + s.runs, 0);
   const matches = combined.reduce((a, s) => a + s.matches, 0);
   return matches ? runs / matches : 0;
@@ -977,7 +1029,7 @@ function battingFormScore(p) {
 function bowlingFormScore(p) {
   const recent = p.seasonLog.slice(-2);
   if (!recent.length) return 0;
-  const combined = recent.map(s => combineStats(s.dom, s.intl, s.franchise));
+  const combined = recent.map(s => combineStats(s.dom, s.intl, s.franchise, s.overseas));
   const wkts = combined.reduce((a, s) => a + s.wickets, 0);
   const matches = combined.reduce((a, s) => a + s.matches, 0);
   return matches ? (wkts / matches) * 20 : 0;
@@ -1013,7 +1065,7 @@ function advanceToNextSeason() {
 function retirePlayer() { state.retired = true; save(); }
 
 function legacyTier(p) {
-  const all = combineStats(p.stats.domestic, p.stats.intl, p.stats.franchise);
+  const all = combineStats(p.stats.domestic, p.stats.intl, p.stats.franchise, p.stats.overseas);
   const battingValue = all.runs;
   const bowlingValue = all.wickets * 24;
   const trophyBonus = p.trophies.length * 220;
@@ -1776,6 +1828,22 @@ function renderHubCareer() {
         </div>
       </div>
     ` : ""}
+    ${p.franchiseHistory.length ? `
+      <div class="card">
+        <div class="section-title">Global franchise circuit</div>
+        <div class="stat-grid" style="margin-top:10px;">
+          ${ratingBar("Matches", p.stats.overseas.matches)}
+          ${ratingBar("Runs", p.stats.overseas.runs)}
+          ${ratingBar("SR", strikeRate(p.stats.overseas))}
+          ${ratingBar("Wickets", p.stats.overseas.wickets)}
+          ${ratingBar("Econ", economyRate(p.stats.overseas))}
+          ${ratingBar("100s", p.stats.overseas.hundreds)}
+        </div>
+        <div class="trophy-list" style="margin-top:10px;">
+          ${p.franchiseHistory.slice().reverse().map(f => `<div class="trophy-item"><span class="icon">🌍</span>${f.team} — ${f.league}<span class="season-tag">S${f.season}</span></div>`).join("")}
+        </div>
+      </div>
+    ` : ""}
     <div class="card">
       <div class="section-title">International career (${p.caps.intl} caps)</div>
       <div class="stat-grid" style="margin-top:10px;">
@@ -1957,6 +2025,56 @@ function renderFranchiseSummary() {
   `);
 }
 
+function renderOverseasOffer() {
+  const p = state;
+  applyTheme(p.country);
+  const o = p.overseasOffer;
+  screen(`
+    ${masthead()}
+    <div class="hero" style="padding-top:8px;">
+      <div class="mode-tag">Overseas interest</div>
+      <h1>${o.league} call-up</h1>
+      <p>${o.team} have offered you a short-term contract in the ${o.league}. A chance to test yourself in a different franchise league before you head back into the international window.</p>
+    </div>
+    <div class="format-card" style="cursor:default;">
+      <div class="format-icon">🌍</div>
+      <div>
+        <div class="format-title">${o.team}</div>
+        <div class="format-desc">${o.league} · ${o.country}</div>
+      </div>
+    </div>
+    <div class="stack">
+      <button class="primary" onclick="App.acceptOverseas()">Sign the contract</button>
+      <button class="secondary" onclick="App.declineOverseas()">Stay focused at home</button>
+    </div>
+  `);
+}
+
+function renderOverseasSummary() {
+  const p = state;
+  applyTheme(p.country);
+  const sum = p.lastOverseasSummary;
+  screen(`
+    ${masthead()}
+    <div class="hero" style="padding-top:6px;">
+      <div class="mode-tag">${sum.league} stint</div>
+      <h1>${sum.team}</h1>
+      <p>${flagFor(sum.country)} ${sum.country}</p>
+    </div>
+    <div class="card">
+      <div class="section-title">Your numbers</div>
+      <div class="stat-grid" style="margin-top:10px;">
+        ${ratingBar("Runs", sum.stats.runs)}
+        ${ratingBar("SR", strikeRate(sum.stats))}
+        ${ratingBar("Wickets", sum.stats.wickets)}
+        ${ratingBar("Econ", economyRate(sum.stats))}
+        ${ratingBar("50s/100s", `${sum.stats.fifties}/${sum.stats.hundreds}`)}
+      </div>
+    </div>
+    <button class="primary" onclick="App.continueFromOverseasSummary()">Continue</button>
+  `);
+}
+
 function renderIntlSummary() {
   const p = state;
   applyCurrentTheme(p);
@@ -2100,8 +2218,8 @@ function renderRetirement() {
   applyTheme(p.country);
   const tier = legacyTier(p);
   const arche = computeArchetype(p);
-  const d = p.stats.domestic, i = p.stats.intl, fr = p.stats.franchise;
-  const all = combineStats(d, i, fr);
+  const d = p.stats.domestic, i = p.stats.intl, fr = p.stats.franchise, ov = p.stats.overseas;
+  const all = combineStats(d, i, fr, ov);
   screen(`
     ${masthead()}
     <div class="hero" style="padding-top:10px;">
@@ -2136,6 +2254,145 @@ function renderRetirement() {
       <div class="trophy-list" style="margin-top:8px;">
         ${p.trophies.length ? p.trophies.map(t => `<div class="trophy-item"><span class="icon">${t.icon}</span>${t.name}<span class="season-tag">S${t.season}</span></div>`).join("")
           : `<div class="empty-note">No trophies this career.</div>`}
+      </div>
+    </div>
+    <button class="primary" onclick="App.goFullRecap()">📊 View full career recap</button>
+    <button class="secondary" onclick="App.newDynasty()">Start a new dynasty</button>
+  `);
+}
+
+function bestCareerFigures(p) {
+  const buckets = [p.stats.domestic, p.stats.intl, p.stats.franchise, p.stats.overseas];
+  const highScore = Math.max(...buckets.map(b => b.highScore));
+  let bestBowling = "0/0";
+  buckets.forEach(b => {
+    const [bw, br] = b.bestBowling.split("/").map(Number);
+    const [cw, cr] = bestBowling.split("/").map(Number);
+    if (bw > cw || (bw === cw && br < cr)) bestBowling = b.bestBowling;
+  });
+  return { highScore, bestBowling };
+}
+
+function renderFullRecap() {
+  const p = state;
+  applyTheme(p.country);
+  const tier = legacyTier(p);
+  const arche = computeArchetype(p);
+  const d = p.stats.domestic, i = p.stats.intl, fr = p.stats.franchise, ov = p.stats.overseas;
+  const all = combineStats(d, i, fr, ov);
+  const best = bestCareerFigures(p);
+  screen(`
+    ${masthead(`<button class="link-btn" onclick="App.goRetirement()">‹ Back</button>`)}
+    <div class="hero" style="padding-top:8px;">
+      <div class="mode-tag">Full Career Recap</div>
+      <h1>${p.name}</h1>
+      <p>${flagFor(p.country)} ${p.country} · ${p.role} · ${p.season} seasons · Retired at ${p.age}</p>
+    </div>
+    <div class="card legacy-tier">
+      <div class="tier-name">${tier.name}</div>
+      <div class="tier-sub">${tier.sub}</div>
+      <div class="empty-note" style="padding-top:8px;">Played like: <strong style="color:var(--accent);">${arche.name}</strong> — ${arche.desc}</div>
+    </div>
+    <div class="card">
+      <div class="section-title">Career-best figures</div>
+      <div class="stat-grid two" style="margin-top:10px;">
+        ${ratingBar("Highest score", best.highScore)}
+        ${ratingBar("Best bowling", best.bestBowling)}
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title">Domestic (${p.team})</div>
+      <div class="stat-grid" style="margin-top:10px;">
+        ${ratingBar("Matches", d.matches)}
+        ${ratingBar("Runs", d.runs)}
+        ${ratingBar("Avg", battingAverage(d))}
+        ${ratingBar("Wickets", d.wickets)}
+        ${ratingBar("Econ", economyRate(d))}
+        ${ratingBar("100s", d.hundreds)}
+      </div>
+    </div>
+    ${p.format === "ALL_ROUND" ? `
+      <div class="card">
+        <div class="section-title">Franchise (${p.franchiseTeam})</div>
+        <div class="stat-grid" style="margin-top:10px;">
+          ${ratingBar("Matches", fr.matches)}
+          ${ratingBar("Runs", fr.runs)}
+          ${ratingBar("SR", strikeRate(fr))}
+          ${ratingBar("Wickets", fr.wickets)}
+          ${ratingBar("Econ", economyRate(fr))}
+          ${ratingBar("100s", fr.hundreds)}
+        </div>
+      </div>
+    ` : ""}
+    ${p.franchiseHistory.length ? `
+      <div class="card">
+        <div class="section-title">Global franchise circuit</div>
+        <div class="stat-grid" style="margin-top:10px;">
+          ${ratingBar("Matches", ov.matches)}
+          ${ratingBar("Runs", ov.runs)}
+          ${ratingBar("SR", strikeRate(ov))}
+          ${ratingBar("Wickets", ov.wickets)}
+          ${ratingBar("Econ", economyRate(ov))}
+          ${ratingBar("100s", ov.hundreds)}
+        </div>
+        <div class="trophy-list" style="margin-top:10px;">
+          ${p.franchiseHistory.map(f => `<div class="trophy-item"><span class="icon">🌍</span>${f.team} — ${f.league}<span class="season-tag">S${f.season}</span></div>`).join("")}
+        </div>
+      </div>
+    ` : ""}
+    <div class="card">
+      <div class="section-title">International (${p.caps.intl} caps)</div>
+      <div class="stat-grid" style="margin-top:10px;">
+        ${ratingBar("Matches", i.matches)}
+        ${ratingBar("Runs", i.runs)}
+        ${ratingBar("Avg", battingAverage(i))}
+        ${ratingBar("Wickets", i.wickets)}
+        ${ratingBar("Econ", economyRate(i))}
+        ${ratingBar("100s", i.hundreds)}
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title">Career totals</div>
+      <div class="stat-grid" style="margin-top:10px;">
+        ${ratingBar("Runs", all.runs)}
+        ${ratingBar("Wickets", all.wickets)}
+        ${ratingBar("100s", all.hundreds)}
+        ${ratingBar("5W hauls", all.fiveWickets)}
+        ${ratingBar("Trophies", p.trophies.length)}
+        ${ratingBar("Awards", p.awards.length)}
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title">Season by season</div>
+      <div style="margin-top:6px;">
+        ${p.seasonLog.map(s => {
+          const combined = combineStats(s.dom, s.intl, s.franchise, s.overseas || emptyStatBlock());
+          const seasonTrophies = p.trophies.filter(t => t.season === s.season);
+          const seasonAwards = p.awards.filter(a => a.season === s.season);
+          return `
+            <div class="match-line">
+              <span class="opp">
+                Season ${s.season} · ${BASE_YEAR + s.season} · Age ${s.age}${s.team ? ` · ${s.team}` : ""}
+                ${seasonTrophies.map(() => `<span class="season-tag">🏆</span>`).join("")}${seasonAwards.map(() => `<span class="season-tag">🌟</span>`).join("")}
+              </span>
+              <span class="res pending">${combined.runs} runs, ${combined.wickets} wkts</span>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title">Trophy cabinet</div>
+      <div class="trophy-list" style="margin-top:8px;">
+        ${p.trophies.length ? p.trophies.map(t => `<div class="trophy-item"><span class="icon">${t.icon}</span>${t.name}<span class="season-tag">S${t.season}</span></div>`).join("")
+          : `<div class="empty-note">No trophies this career.</div>`}
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title">Awards</div>
+      <div class="trophy-list" style="margin-top:8px;">
+        ${p.awards.length ? p.awards.map(a => `<div class="trophy-item"><span class="icon">${a.icon}</span>${a.name}<span class="season-tag">S${a.season}</span></div>`).join("")
+          : `<div class="empty-note">No individual awards yet.</div>`}
       </div>
     </div>
     <button class="primary" onclick="App.newDynasty()">Start a new dynasty</button>
@@ -2380,11 +2637,29 @@ const App = {
       if (!p.franchiseDone) return renderHub();
       return renderFranchiseSummary();
     }
+    if (!p.overseasDone) return App.enterOverseasPhase();
     if (p.selectedThisSeason) return App.enterInternationalPhase();
     renderSeasonSummary();
   },
 
   simRestFranchise() { simRestOfFranchise(); renderFranchiseSummary(); },
+
+  enterOverseasPhase() {
+    const p = state;
+    if (p.overseasPending && !p.overseasDone) return renderOverseasOffer();
+    return renderHub();
+  },
+  acceptOverseas() {
+    playOverseasStint();
+    renderOverseasSummary();
+  },
+  declineOverseas() {
+    const p = state;
+    p.overseasPending = false; p.overseasDone = true;
+    decideInternationalSelection();
+    proceedAfterOverseas();
+  },
+  continueFromOverseasSummary() { proceedAfterOverseas(); },
 
   confirmDebutAndPlay() {
     state.debutPending = null;
@@ -2425,6 +2700,7 @@ const App = {
   },
   continueFromFranchiseSummary() {
     const p = state;
+    if (!p.overseasDone) return App.enterOverseasPhase();
     if (p.selectedThisSeason && !p.intlDone) return App.enterInternationalPhase();
     renderSeasonSummary();
   },
@@ -2508,6 +2784,14 @@ const App = {
     renderHub();
   },
 
+  goFullRecap() {
+    renderFullRecap();
+  },
+
+  goRetirement() {
+    renderRetirement();
+  },
+
   newDynasty() {
     state = null; currentSaveId = null;
     draft = { name: "", country: COUNTRIES[0].name, role: "Batsman", batHand: "Right-handed", bowlType: "Pace", bowlSubStyle: PACE_SUBSTYLES[0], format: "ALL_ROUND" };
@@ -2547,21 +2831,22 @@ function freshPlayer(d) {
     rankBat: null, rankBowl: null,
     season: 1,
     matchIndex: 0, fixtures: [],
-    seasonDomStats: emptyStatBlock(), seasonIntlStats: emptyStatBlock(), seasonFranchiseStats: emptyStatBlock(),
+    seasonDomStats: emptyStatBlock(), seasonIntlStats: emptyStatBlock(), seasonFranchiseStats: emptyStatBlock(), seasonOverseasStats: emptyStatBlock(),
     selectedThisSeason: false,
     intlFixtures: [], intlIndex: 0,
     franchiseFixtures: [], franchiseIndex: 0,
     domesticDone: false, intlDone: false, franchiseDone: false,
+    overseasPending: false, overseasDone: true, overseasOffer: null, franchiseHistory: [],
     retired: false, forcedRetireOffer: false,
-    caps: { domestic: 0, intl: 0, franchise: 0 },
+    caps: { domestic: 0, intl: 0, franchise: 0, overseas: 0 },
     formatCaps: { TEST: 0, ODI: 0, T20: 0 },
     debutPending: null,
-    stats: { domestic: emptyStatBlock(), intl: emptyStatBlock(), franchise: emptyStatBlock() },
+    stats: { domestic: emptyStatBlock(), intl: emptyStatBlock(), franchise: emptyStatBlock(), overseas: emptyStatBlock() },
     trophies: [], awards: [], seasonLog: [],
     pendingEvents: [], activeEvent: null,
     wheelResult: null, wheelSpinning: false, introShownThisWindow: false,
     lastMatchResult: null, lastLeagueFinish: null, lastSeasonSummary: null,
-    lastIntlSummary: null, lastFranchiseSummary: null,
+    lastIntlSummary: null, lastFranchiseSummary: null, lastOverseasSummary: null,
     lastRatingDelta: { bat: 0, bowl: 0 },
     bigEvent: null,
     tournamentTable: null,
