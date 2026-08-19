@@ -345,19 +345,32 @@ function simulateBattingPhase(effRating, oppStrength, fmt, approach) {
   return { runs, balls: Math.max(balls, fours * 4 + sixes * 6), fours, sixes, out };
 }
 
-function simulateBowlingPhase(effRating, oppStrength, fmt, approach, phaseIndex) {
-  const scale = FORMAT_SCALE[fmt] || FORMAT_SCALE.T20;
+// realistic bowling allocation per format — T20/ODI bowl their exact allowance one over at a time;
+// Tests have no fixed allowance, so spells are rolled individually and may or may not continue
+function bowlingSpellOvers(fmt) {
+  if (fmt === "TEST" || fmt === "FC") return randInt(3, 7);
+  return 1;
+}
+function bowlingOversCap(fmt) {
+  if (fmt === "T20" || fmt === "FRANCHISE") return 4;
+  if (fmt === "ODI") return 10;
+  return 30; // Test/FC — a generous sanity cap across however many spells you're given
+}
+// chance of getting ANOTHER spell in a Test — shrinks the more you've already bowled that innings
+function testSpellContinues(spellsBowled) {
+  const chance = [0.68, 0.42, 0.22, 0.1][Math.min(spellsBowled, 3)] || 0;
+  return Math.random() < chance;
+}
+
+function simulateBowlingSpell(effRating, oppStrength, fmt, approach, overs) {
   const app = BOWLING_APPROACHES[approach] || BOWLING_APPROACHES.Balanced;
   const longFmt = fmt === "TEST" || fmt === "FC";
   const form = randInt(-10, 10);
   const effective = clamp(effRating + form - (oppStrength - 50) / 3, 1, 99);
-  const oversBefore = Math.round((scale.overs * phaseIndex) / LIVE_PHASES);
-  const oversAfter = Math.round((scale.overs * (phaseIndex + 1)) / LIVE_PHASES);
-  const overs = Math.max(1, oversAfter - oversBefore);
   const perOverWicketChance = clamp((effective / (longFmt ? 340 : 240)) * app.wicketMult, 0.01, 0.5);
   let wickets = 0;
   for (let i = 0; i < overs; i++) if (Math.random() < perOverWicketChance) wickets++;
-  wickets = clamp(wickets, 0, longFmt ? 4 : 3);
+  wickets = clamp(wickets, 0, longFmt ? 6 : 3);
   const economyBase = longFmt ? 3.6 : fmt === "ODI" ? 5.6 : 11.5;
   const economy = clamp(economyBase - effective / (longFmt ? 24 : 13) + app.econAdj + rand(-1.4, 1.4), 1.2, 17);
   const runsConceded = Math.max(0, Math.round(economy * overs));
@@ -1484,7 +1497,7 @@ function renderLiveBatting() {
         `).join("")}
       </div>
     </div>
-    <button class="link-btn" onclick="App.quickSimLiveInnings()" style="align-self:center;">⏩ Quick-sim the rest of this match</button>
+    <button class="secondary" onclick="App.quickSimLiveInnings()">⏩ Simulate rest of match</button>
   `);
 }
 
@@ -1492,12 +1505,16 @@ function renderLiveBowling() {
   const li = window.__live;
   const p = state;
   applyCurrentTheme(p);
+  const fmt = li.fx.fmt;
+  const longFmt = fmt === "TEST" || fmt === "FC";
+  const cap = bowlingOversCap(fmt);
   if (li.revealing) {
     const seg = li.lastBowlSeg;
+    const label = longFmt ? `Spell ${li.bowlingSpellIndex}` : `Over ${li.bowl.overs}/${cap}`;
     screen(`
       ${masthead()}
       <div class="card">
-        <div class="section-title" style="text-align:center;">Bowling — spell ${li.bowlingPhase}/${LIVE_PHASES}</div>
+        <div class="section-title" style="text-align:center;">Bowling — ${label}</div>
         <div class="result-figures">
           <div class="big">${seg.wickets}/${seg.runsConceded}</div>
           <div class="sub">${seg.overs} over${seg.overs === 1 ? "" : "s"}</div>
@@ -1515,21 +1532,22 @@ function renderLiveBowling() {
     `);
     return;
   }
+  const upLabel = longFmt ? `Spell ${li.bowlingSpellIndex + 1}` : `Over ${li.bowl.overs + 1}/${cap}`;
   screen(`
     ${masthead()}
     <div class="card">
-      <div class="section-title" style="text-align:center;">Bowling — spell ${li.bowlingPhase + 1}/${LIVE_PHASES} vs ${li.fx.opponent}</div>
-      <div class="empty-note" style="padding:4px 0 0;">${li.bowlingPhase === 0 ? "You've got the ball." : `${li.bowl.wickets}/${li.bowl.runsConceded} from ${li.bowl.overs} so far.`}</div>
+      <div class="section-title" style="text-align:center;">Bowling — ${upLabel} vs ${li.fx.opponent}</div>
+      <div class="empty-note" style="padding:4px 0 0;">${li.bowlingSpellIndex === 0 ? "You've got the ball." : `${li.bowl.wickets}/${li.bowl.runsConceded} from ${li.bowl.overs} so far.`}</div>
     </div>
     <div class="card">
-      <div class="section-title">How do you bowl this spell?</div>
+      <div class="section-title">How do you bowl ${longFmt ? "this spell" : "this over"}?</div>
       <div class="stack" style="margin-top:8px;">
         ${Object.keys(BOWLING_APPROACHES).map(k => `
           <button class="secondary" onclick="App.chooseBowlingPhase('${k}')">${k === "Contain" ? "🔒" : k === "Attack" ? "🎯" : "🔁"} ${k} — ${BOWLING_APPROACHES[k].desc}</button>
         `).join("")}
       </div>
     </div>
-    <button class="link-btn" onclick="App.quickSimLiveInnings()" style="align-self:center;">⏩ Quick-sim the rest of this match</button>
+    <button class="secondary" onclick="App.quickSimLiveInnings()">⏩ Simulate rest of match</button>
   `);
 }
 
@@ -2239,11 +2257,14 @@ const App = {
     if (!fx) return renderHub();
     const doesBat = p.role !== "Bowler" || Math.random() < 0.85;
     const doesBowl = p.role === "Bowler" || p.role === "All-rounder";
+    const longFmt = fx.fmt === "TEST" || fx.fmt === "FC";
+    // Tests have no guaranteed bowling allocation — sometimes the captain barely turns to you
+    const skippedTestBowling = doesBowl && longFmt && Math.random() < 0.12;
     window.__live = {
       kind, fx, cond: matchConditionsFor(p),
-      doesBat, doesBowl,
-      battingPhase: 0, bowlingPhase: 0,
-      battingDone: !doesBat, bowlingDone: !doesBowl,
+      doesBat, doesBowl, skippedTestBowling,
+      battingPhase: 0, bowlingSpellIndex: 0,
+      battingDone: !doesBat, bowlingDone: !doesBowl || skippedTestBowling,
       bat: { runs: 0, balls: 0, fours: 0, sixes: 0, out: false },
       bowl: { overs: 0, wickets: 0, runsConceded: 0 },
       tossNote: tossNoteFor(window.__matchToss),
@@ -2275,12 +2296,20 @@ const App = {
   chooseBowlingPhase(k) {
     const p = state;
     const li = window.__live;
+    const fmt = li.fx.fmt;
+    const longFmt = fmt === "TEST" || fmt === "FC";
+    const cap = bowlingOversCap(fmt);
+    const overs = Math.max(1, Math.min(bowlingSpellOvers(fmt), cap - li.bowl.overs));
     const effRating = p.bowl * li.cond.bowlMult;
-    const seg = simulateBowlingPhase(effRating, li.fx.oppStrength, li.fx.fmt, k, li.bowlingPhase);
+    const seg = simulateBowlingSpell(effRating, li.fx.oppStrength, fmt, k, overs);
     li.bowl.overs += seg.overs; li.bowl.wickets += seg.wickets; li.bowl.runsConceded += seg.runsConceded;
-    li.bowlingPhase++;
+    li.bowlingSpellIndex++;
     li.lastBowlSeg = seg;
-    if (li.bowlingPhase >= LIVE_PHASES) li.bowlingDone = true;
+    if (longFmt) {
+      if (li.bowl.overs >= cap || !testSpellContinues(li.bowlingSpellIndex - 1)) li.bowlingDone = true;
+    } else if (li.bowl.overs >= cap) {
+      li.bowlingDone = true;
+    }
     li.revealing = true;
     state.bowlingApproach = k; save();
     renderLiveBowling();
@@ -2294,7 +2323,7 @@ const App = {
     } else if (li.doesBat) {
       perf.batted = true; perf.runs = li.bat.runs; perf.balls = Math.max(li.bat.balls, 1); perf.fours = li.bat.fours; perf.sixes = li.bat.sixes; perf.out = li.bat.out;
     }
-    if (li.doesBowl && li.bowlingPhase === 0) {
+    if (li.doesBowl && !li.skippedTestBowling && li.bowlingSpellIndex === 0) {
       Object.assign(perf, simulateBowling(p.bowl * li.cond.bowlMult, li.fx.oppStrength, li.fx.fmt, p.bowlingApproach || "Balanced"));
     } else if (li.doesBowl) {
       perf.bowled = true; perf.overs = li.bowl.overs; perf.wickets = li.bowl.wickets; perf.runsConceded = li.bowl.runsConceded;
@@ -2310,9 +2339,11 @@ const App = {
   },
   resolveLiveInnings(perf) {
     const li = window.__live;
-    if (li.kind === "domestic") playDomesticMatch(perf, li.tossNote);
-    else if (li.kind === "franchise") playFranchiseMatch(perf, li.tossNote);
-    else playIntlMatch(perf, li.tossNote);
+    const bowlNote = li.skippedTestBowling ? "🎽 The captain barely turned to you today — a quiet one with the ball." : null;
+    const note = [li.tossNote, bowlNote].filter(Boolean).join(" ") || null;
+    if (li.kind === "domestic") playDomesticMatch(perf, note);
+    else if (li.kind === "franchise") playFranchiseMatch(perf, note);
+    else playIntlMatch(perf, note);
     window.__live = null;
     renderMatchResult();
   },
