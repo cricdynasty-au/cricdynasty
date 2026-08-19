@@ -316,6 +316,14 @@ function simulateBowling(rating, oppStrength, fmt, approach) {
 }
 
 const LIVE_PHASES = 3;
+const BATTING_PHASE_NAMES = {
+  TEST: ["Morning Session", "Afternoon Session", "Evening Session"],
+  FC: ["Morning Session", "Afternoon Session", "Evening Session"],
+  ODI: ["Powerplay", "Middle Overs", "Death Overs"],
+  T20: ["Powerplay", "Middle Overs", "Death Overs"],
+  FRANCHISE: ["Powerplay", "Middle Overs", "Death Overs"],
+};
+function battingPhaseName(fmt, index) { return (BATTING_PHASE_NAMES[fmt] || BATTING_PHASE_NAMES.T20)[index] || `Phase ${index + 1}`; }
 
 // one third of an innings — used by the live, phase-by-phase play flow
 function simulateBattingPhase(effRating, oppStrength, fmt, approach) {
@@ -1438,10 +1446,11 @@ function renderLiveBatting() {
   applyCurrentTheme(p);
   if (li.revealing) {
     const seg = li.lastBatSeg;
+    const doneName = battingPhaseName(li.fx.fmt, li.battingPhase - 1);
     screen(`
       ${masthead()}
       <div class="card">
-        <div class="section-title" style="text-align:center;">Batting — spell ${li.battingPhase}/${LIVE_PHASES}</div>
+        <div class="section-title" style="text-align:center;">Batting — ${doneName}</div>
         <div class="result-figures">
           <div class="big">${seg.out ? `${seg.runs}(${seg.balls})` : `+${seg.runs}(${seg.balls})`}</div>
           <div class="sub">${seg.out ? "OUT!" : `${seg.fours}x4, ${seg.sixes}x6`}</div>
@@ -1460,14 +1469,15 @@ function renderLiveBatting() {
     `);
     return;
   }
+  const upName = battingPhaseName(li.fx.fmt, li.battingPhase);
   screen(`
     ${masthead()}
     <div class="card">
-      <div class="section-title" style="text-align:center;">Batting — spell ${li.battingPhase + 1}/${LIVE_PHASES} vs ${li.fx.opponent}</div>
+      <div class="section-title" style="text-align:center;">Batting — ${upName} vs ${li.fx.opponent}</div>
       <div class="empty-note" style="padding:4px 0 0;">${li.battingPhase === 0 ? "You're at the crease." : `${li.bat.runs} off ${li.bat.balls} so far.`}</div>
     </div>
     <div class="card">
-      <div class="section-title">How do you play this spell?</div>
+      <div class="section-title">How do you play the ${upName.toLowerCase()}?</div>
       <div class="stack" style="margin-top:8px;">
         ${Object.keys(BATTING_APPROACHES).map(k => `
           <button class="secondary" onclick="App.chooseBattingPhase('${k}')">${k === "Cautious" ? "🛡️" : k === "Aggressive" ? "💥" : "🔄"} ${k} — ${BATTING_APPROACHES[k].desc}</button>
