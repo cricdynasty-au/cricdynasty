@@ -332,28 +332,27 @@ function simulateBattingPhase(effRating, oppStrength, fmt, approach) {
   const form = randInt(-8, 8);
   const effective = clamp(effRating + form - (oppStrength - 50) / 4, 1, 99);
   const outBase = longFmt ? 0.84 : fmt === "ODI" ? 0.77 : 0.8;
-  const perPhaseOut = clamp((outBase - effective / 900 + app.outAdj) * 0.46, 0.05, 0.55);
+  const perPhaseOut = clamp((outBase - effective / 900 + app.outAdj) * 0.68, 0.08, 0.72);
   const out = Math.random() < perPhaseOut;
 
+  // every phase — session or powerplay/middle/death alike — means real time at the crease.
+  // balls faced comes first (how long that phase actually lasts for you), runs follow from strike rate.
+  let balls, srFloor, srSlope, srCap, fourShare, sixShare;
   if (longFmt) {
-    // a session means real time at the crease, whatever the scoring rate — balls come first, runs follow
-    const balls = randInt(35, 85);
-    const baseSR = clamp(28 + effective * 0.35, 20, 75) * app.srMult;
-    const sr = baseSR * rand(0.72, 1.28);
-    const runs = Math.max(0, Math.round((balls * sr) / 100));
-    const fours = clamp(Math.round((runs * rand(0.1, 0.22)) / 4), 0, 12);
-    const sixes = clamp(Math.round((runs * rand(0, 0.04)) / 6), 0, 3);
-    return { runs, balls: Math.max(balls, fours * 4 + sixes * 6), fours, sixes, out };
+    balls = randInt(35, 85);
+    srFloor = 28; srSlope = 0.35; srCap = 75; fourShare = [0.1, 0.22]; sixShare = [0, 0.04];
+  } else if (fmt === "ODI") {
+    balls = randInt(15, 35);
+    srFloor = 45; srSlope = 0.55; srCap = 130; fourShare = [0.12, 0.26]; sixShare = [0.01, 0.06];
+  } else {
+    balls = randInt(9, 22);
+    srFloor = 55; srSlope = 0.85; srCap = 195; fourShare = [0.14, 0.3]; sixShare = [0.02, 0.1];
   }
-
-  const cfg = BATTING_MEAN[fmt] || BATTING_MEAN.T20;
-  const fullMean = clamp((cfg.base + effective * cfg.slope) * app.meanMult, 3, 85);
-  const phaseMean = fullMean / LIVE_PHASES;
-  const runs = clamp(Math.round(-Math.log(Math.random()) * phaseMean), 0, Math.round(phaseMean * 4.6));
-  const sr = cfg.sr * app.srMult * rand(0.78, 1.22);
-  const balls = Math.max(1, Math.round((runs / sr) * 100));
-  const fours = clamp(Math.round((runs * rand(0.12, 0.28)) / 4), 0, 10);
-  const sixes = clamp(Math.round((runs * rand(0.02, 0.12)) / 6), 0, 6);
+  const baseSR = clamp(srFloor + effective * srSlope, 35, srCap) * app.srMult;
+  const sr = baseSR * rand(0.75, 1.25);
+  const runs = Math.max(0, Math.round((balls * sr) / 100));
+  const fours = clamp(Math.round((runs * rand(fourShare[0], fourShare[1])) / 4), 0, 12);
+  const sixes = clamp(Math.round((runs * rand(sixShare[0], sixShare[1])) / 6), 0, 8);
   return { runs, balls: Math.max(balls, fours * 4 + sixes * 6), fours, sixes, out };
 }
 
