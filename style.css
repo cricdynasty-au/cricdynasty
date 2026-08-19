@@ -14,6 +14,9 @@
   --accent-3: #e85d75;
   --danger: #e85d75;
   --radius: 16px;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-display: "Rajdhani", var(--font-body);
+  --font-score: "Teko", var(--font-body);
   transition: background-color .3s;
 }
 
@@ -26,7 +29,7 @@ html, body {
     radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--accent-2) 10%, transparent) 0%, transparent 40%),
     var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-body);
   transition: background .4s ease;
 }
 
@@ -82,7 +85,14 @@ html, body {
   text-transform: uppercase;
 }
 
-.hero h1 { font-size: 28px; margin: 6px 0 8px; font-weight: 900; letter-spacing: -0.5px; }
+.hero h1 {
+  font-family: var(--font-display);
+  font-size: 34px;
+  margin: 4px 0 8px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  text-transform: uppercase;
+}
 
 .hero p {
   color: var(--text-dim);
@@ -98,6 +108,7 @@ html, body {
   border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border));
   border-radius: var(--radius);
   padding: 16px;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.28);
 }
 
 .stack { display: flex; flex-direction: column; gap: 10px; }
@@ -165,8 +176,12 @@ button.primary {
   font-weight: 800;
   cursor: pointer;
   width: 100%;
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 35%, transparent);
+  transition: transform .12s, box-shadow .12s;
 }
-button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+button.primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 45%, transparent); }
+button.primary:active:not(:disabled) { transform: translateY(0); }
+button.primary:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 
 button.secondary {
   background: transparent;
@@ -247,7 +262,7 @@ button.link-btn:hover { border-color: var(--accent); color: var(--accent); backg
   font-size: 22px;
   flex-shrink: 0;
 }
-.player-name { font-size: 17px; font-weight: 800; }
+.player-name { font-family: var(--font-display); font-size: 20px; font-weight: 700; }
 .player-sub { font-size: 12.5px; color: var(--text-dim); margin-top: 2px; }
 
 /* ---- tab bar (hub navigation) ---- */
@@ -312,17 +327,19 @@ button.link-btn:hover { border-color: var(--accent); color: var(--accent); backg
 .stat-box {
   background: var(--bg-2);
   border: 1px solid var(--border);
+  border-top: 2px solid color-mix(in srgb, var(--accent) 40%, var(--border));
   border-radius: 10px;
   padding: 10px 8px;
   text-align: center;
 }
-.stat-box .val { font-size: 18px; font-weight: 800; color: var(--accent); }
-.stat-box .lbl { font-size: 10.5px; color: var(--text-dim); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.4px; }
+.stat-box .val { font-family: var(--font-score); font-size: 26px; line-height: 1; font-weight: 600; color: var(--accent); }
+.stat-box .lbl { font-size: 10.5px; color: var(--text-dim); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.4px; }
 
 .section-title {
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 1px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
   text-transform: uppercase;
   color: var(--text-dim);
   margin: 4px 0 -2px;
@@ -372,8 +389,14 @@ button.link-btn:hover { border-color: var(--accent); color: var(--accent); backg
 }
 
 .result-figures { text-align: center; padding: 10px 0; }
-.result-figures .big { font-size: 40px; font-weight: 900; }
-.result-figures .sub { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+.result-figures .big {
+  font-family: var(--font-score);
+  font-size: 56px;
+  line-height: 1;
+  font-weight: 600;
+  text-shadow: 0 0 24px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.result-figures .sub { font-size: 13px; color: var(--text-dim); margin-top: 6px; }
 
 .trophy-list { display: flex; flex-direction: column; gap: 8px; }
 .trophy-item { display: flex; align-items: center; gap: 10px; font-size: 14px; }
@@ -383,7 +406,7 @@ button.link-btn:hover { border-color: var(--accent); color: var(--accent); backg
 .empty-note { color: var(--text-dim); font-size: 13.5px; text-align: center; padding: 14px 0; }
 
 .legacy-tier { text-align: center; padding: 6px 0 2px; }
-.legacy-tier .tier-name { font-size: 26px; font-weight: 900; color: var(--accent-2); }
+.legacy-tier .tier-name { font-family: var(--font-display); font-size: 30px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--accent-2); }
 .legacy-tier .tier-sub { color: var(--text-dim); font-size: 13px; margin-top: 4px; }
 
 .divider { height: 1px; background: var(--border); margin: 4px 0; }
@@ -406,7 +429,7 @@ button.link-btn:hover { border-color: var(--accent); color: var(--accent); backg
   background: color-mix(in srgb, var(--accent) 10%, var(--card));
 }
 .format-icon { font-size: 28px; flex-shrink: 0; }
-.format-title { font-size: 15px; font-weight: 800; }
+.format-title { font-family: var(--font-display); font-size: 18px; font-weight: 700; }
 .format-desc { font-size: 12.5px; color: var(--text-dim); margin-top: 3px; line-height: 1.4; }
 
 /* ---- how to play / faq ---- */
@@ -524,8 +547,9 @@ button.link-btn:hover { border-color: var(--accent); color: var(--accent); backg
   50% { transform: translateY(-10px); }
 }
 .big-event-title {
-  font-size: 38px;
-  font-weight: 900;
+  font-family: var(--font-display);
+  font-size: 44px;
+  font-weight: 700;
   text-align: center;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   -webkit-background-clip: text;

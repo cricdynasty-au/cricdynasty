@@ -1568,20 +1568,20 @@ function renderHubOverview() {
     const label = p.domesticKind === "FRANCHISE" ? "Franchise league" : "First-class match";
     phase = `Season ${p.season}/${MAX_SEASONS} · ${calendarWindowFor(p)} · ${label} ${p.matchIndex + 1}/${p.fixtures.length}`;
     actionButtons = `
-      <button class="primary" onclick="App.goMatchSetup('domestic')">🏏 Set approach &amp; play</button>
+      <button class="primary" onclick="App.goMatchSetup('domestic')">🏏 Play next match</button>
       <button class="secondary" onclick="App.simRestSeason()">⏩ Sim rest of season</button>
     `;
   } else if (!p.franchiseDone) {
     phase = `Season ${p.season}/${MAX_SEASONS} · Franchise stint (${p.franchiseTeam}) ${p.franchiseIndex + 1}/${p.franchiseFixtures.length}`;
     actionButtons = `
-      <button class="primary" onclick="App.goMatchSetup('franchise')">⚡ Set approach &amp; play</button>
+      <button class="primary" onclick="App.goMatchSetup('franchise')">⚡ Play next match</button>
       <button class="secondary" onclick="App.simRestFranchise()">⏩ Sim rest of stint</button>
     `;
   } else if (p.selectedThisSeason && !p.intlDone) {
     const tag = p.intlFixtures[0] ? p.intlFixtures[0].tag : "Series";
     phase = `Season ${p.season}/${MAX_SEASONS} · ${tag} ${p.intlIndex + 1}/${p.intlFixtures.length}`;
     actionButtons = `
-      <button class="primary" onclick="App.goMatchSetup('intl')">✈️ Set approach &amp; play</button>
+      <button class="primary" onclick="App.goMatchSetup('intl')">✈️ Play next match</button>
       <button class="secondary" onclick="App.simRestIntl()">⏩ Sim rest of window</button>
     `;
   } else {
