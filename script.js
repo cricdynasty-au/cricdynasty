@@ -315,6 +315,47 @@ function simulateBowling(rating, oppStrength, fmt, approach) {
   return { bowled: true, overs, wickets, runsConceded };
 }
 
+const LIVE_PHASES = 3;
+
+// one third of an innings — used by the live, phase-by-phase play flow
+function simulateBattingPhase(effRating, oppStrength, fmt, approach) {
+  const cfg = BATTING_MEAN[fmt] || BATTING_MEAN.T20;
+  const app = BATTING_APPROACHES[approach] || BATTING_APPROACHES.Balanced;
+  const longFmt = fmt === "TEST" || fmt === "FC";
+  const form = randInt(-8, 8);
+  const effective = clamp(effRating + form - (oppStrength - 50) / 4, 1, 99);
+  const fullMean = clamp((cfg.base + effective * cfg.slope) * app.meanMult, 3, 85);
+  const phaseMean = fullMean / LIVE_PHASES;
+  const runs = clamp(Math.round(-Math.log(Math.random()) * phaseMean), 0, Math.round(phaseMean * 4.6));
+  const outBase = longFmt ? 0.84 : fmt === "ODI" ? 0.77 : 0.8;
+  const perPhaseOut = clamp((outBase - effective / 900 + app.outAdj) * 0.46, 0.05, 0.55);
+  const out = Math.random() < perPhaseOut;
+  const sr = cfg.sr * app.srMult * rand(0.78, 1.22);
+  const balls = Math.max(1, Math.round((runs / sr) * 100));
+  const fours = clamp(Math.round((runs * rand(0.12, 0.28)) / 4), 0, 10);
+  const sixes = clamp(Math.round((runs * rand(0.02, 0.12)) / 6), 0, 6);
+  return { runs, balls: Math.max(balls, fours * 4 + sixes * 6), fours, sixes, out };
+}
+
+function simulateBowlingPhase(effRating, oppStrength, fmt, approach, phaseIndex) {
+  const scale = FORMAT_SCALE[fmt] || FORMAT_SCALE.T20;
+  const app = BOWLING_APPROACHES[approach] || BOWLING_APPROACHES.Balanced;
+  const longFmt = fmt === "TEST" || fmt === "FC";
+  const form = randInt(-10, 10);
+  const effective = clamp(effRating + form - (oppStrength - 50) / 3, 1, 99);
+  const oversBefore = Math.round((scale.overs * phaseIndex) / LIVE_PHASES);
+  const oversAfter = Math.round((scale.overs * (phaseIndex + 1)) / LIVE_PHASES);
+  const overs = Math.max(1, oversAfter - oversBefore);
+  const perOverWicketChance = clamp((effective / (longFmt ? 340 : 240)) * app.wicketMult, 0.01, 0.5);
+  let wickets = 0;
+  for (let i = 0; i < overs; i++) if (Math.random() < perOverWicketChance) wickets++;
+  wickets = clamp(wickets, 0, longFmt ? 4 : 3);
+  const economyBase = longFmt ? 3.6 : fmt === "ODI" ? 5.6 : 11.5;
+  const economy = clamp(economyBase - effective / (longFmt ? 24 : 13) + app.econAdj + rand(-1.4, 1.4), 1.2, 17);
+  const runsConceded = Math.max(0, Math.round(economy * overs));
+  return { overs, wickets, runsConceded };
+}
+
 const PITCH_TYPES = [
   { key: "GREEN", label: "Green Seamer", icon: "🌱", desc: "Grass left on the surface — seam bowlers will fancy this early on.", battingMult: 0.9, paceMult: 1.18, spinMult: 0.9, rightCall: "BOWL" },
   { key: "FLAT", label: "Flat Belter", icon: "🏏", desc: "A belter of a pitch — runs should flow all day.", battingMult: 1.15, paceMult: 0.9, spinMult: 0.9, rightCall: "BAT" },
@@ -545,12 +586,12 @@ function startSeason() {
   save();
 }
 
-function playDomesticMatch() {
+function playDomesticMatch(precomputedPerf, precomputedTossNote) {
   const p = state;
   const fx = p.fixtures[p.matchIndex];
-  const tossNote = tossNoteFor(window.__matchToss);
-  const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
-  window.__matchToss = null;
+  const tossNote = precomputedPerf ? precomputedTossNote : tossNoteFor(window.__matchToss);
+  const perf = precomputedPerf || simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
+  if (!precomputedPerf) window.__matchToss = null;
   const won = Math.random() < teamWinProbability(domesticTeamStrength(p), fx.oppStrength, perf);
   fx.played = true; fx.won = won;
   addStat(p.seasonDomStats, perf); addStat(p.stats.domestic, perf);
@@ -620,12 +661,12 @@ function startFranchiseStint() {
   p.franchiseDone = false;
 }
 
-function playFranchiseMatch() {
+function playFranchiseMatch(precomputedPerf, precomputedTossNote) {
   const p = state;
   const fx = p.franchiseFixtures[p.franchiseIndex];
-  const tossNote = tossNoteFor(window.__matchToss);
-  const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
-  window.__matchToss = null;
+  const tossNote = precomputedPerf ? precomputedTossNote : tossNoteFor(window.__matchToss);
+  const perf = precomputedPerf || simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
+  if (!precomputedPerf) window.__matchToss = null;
   const won = Math.random() < teamWinProbability(domesticTeamStrength(p) + 4, fx.oppStrength, perf);
   fx.played = true; fx.won = won;
   addStat(p.seasonFranchiseStats, perf); addStat(p.stats.franchise, perf);
@@ -721,12 +762,12 @@ function updateTournamentTable(opponentName, playerWon) {
   }
 }
 
-function playIntlMatch() {
+function playIntlMatch(precomputedPerf, precomputedTossNote) {
   const p = state;
   const fx = p.intlFixtures[p.intlIndex];
-  const tossNote = tossNoteFor(window.__matchToss);
-  const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
-  window.__matchToss = null;
+  const tossNote = precomputedPerf ? precomputedTossNote : tossNoteFor(window.__matchToss);
+  const perf = precomputedPerf || simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
+  if (!precomputedPerf) window.__matchToss = null;
   const won = Math.random() < teamWinProbability(intlTeamStrength(p), fx.oppStrength, perf);
   fx.played = true; fx.won = won;
   addStat(p.seasonIntlStats, perf); addStat(p.stats.intl, perf);
@@ -1355,11 +1396,7 @@ function renderMatchSetup(kind) {
   applyCurrentTheme(p);
   const fx = currentFixtureFor(kind);
   if (!fx) return renderHub();
-  const doesBat = p.role !== "Bowler";
-  const doesBowl = p.role === "Bowler" || p.role === "All-rounder";
   const heading = kind === "intl" ? (fx.tag || "International") : kind === "franchise" ? `Franchise · ${fmtLabel(fx.fmt)}` : `Domestic · ${fmtLabel(fx.fmt)}`;
-  const battingApproach = p.battingApproach || "Balanced";
-  const bowlingApproach = p.bowlingApproach || "Balanced";
   const toss = window.__matchToss;
   const tossReady = !toss || !toss.wonToss || !!toss.decision;
   screen(`
@@ -1386,32 +1423,103 @@ function renderMatchSetup(kind) {
         `}
       </div>
     ` : ""}
-    ${doesBat ? `
-      <div class="card">
-        <div class="section-title">Batting approach</div>
-        <div class="option-grid-3" style="margin-top:8px;">
-          ${Object.keys(BATTING_APPROACHES).map(k => `
-            <div class="pill-btn ${battingApproach === k ? "selected" : ""}" onclick="App.setBattingApproach('${k}')" style="font-size:12px;">${k}</div>
-          `).join("")}
-        </div>
-        <div class="empty-note" style="padding:6px 0 0;text-align:left;">${BATTING_APPROACHES[battingApproach].desc}</div>
-      </div>
-    ` : ""}
-    ${doesBowl ? `
-      <div class="card">
-        <div class="section-title">Bowling approach</div>
-        <div class="option-grid-3" style="margin-top:8px;">
-          ${Object.keys(BOWLING_APPROACHES).map(k => `
-            <div class="pill-btn ${bowlingApproach === k ? "selected" : ""}" onclick="App.setBowlingApproach('${k}')" style="font-size:12px;">${k}</div>
-          `).join("")}
-        </div>
-        <div class="empty-note" style="padding:6px 0 0;text-align:left;">${BOWLING_APPROACHES[bowlingApproach].desc}</div>
-      </div>
-    ` : ""}
     <div class="card stack">
-      <button class="primary" ${tossReady ? "" : "disabled"} onclick="App.confirmPlayMatch('${kind}')">🏏 Play match</button>
+      <button class="primary" ${tossReady ? "" : "disabled"} onclick="App.confirmPlayMatch('${kind}')">🏏 Walk out to play</button>
       <button class="secondary" onclick="App.goHub()">‹ Back</button>
     </div>
+  `);
+}
+
+/* ================= screens: live innings ================= */
+
+function renderLiveBatting() {
+  const li = window.__live;
+  const p = state;
+  applyCurrentTheme(p);
+  if (li.revealing) {
+    const seg = li.lastBatSeg;
+    screen(`
+      ${masthead()}
+      <div class="card">
+        <div class="section-title" style="text-align:center;">Batting — spell ${li.battingPhase}/${LIVE_PHASES}</div>
+        <div class="result-figures">
+          <div class="big">${seg.out ? `${seg.runs}(${seg.balls})` : `+${seg.runs}(${seg.balls})`}</div>
+          <div class="sub">${seg.out ? "OUT!" : `${seg.fours}x4, ${seg.sixes}x6`}</div>
+        </div>
+        ${seg.out ? `<div class="badge" style="display:block;text-align:center;width:fit-content;margin:6px auto 0;background:rgba(232,93,117,0.15);color:var(--accent-3);">Innings over</div>` : ""}
+      </div>
+      <div class="card">
+        <div class="section-title">Innings so far</div>
+        <div class="stat-grid" style="margin-top:8px;">
+          ${ratingBar("Runs", li.bat.runs)}
+          ${ratingBar("Balls", li.bat.balls)}
+          ${ratingBar("Boundaries", `${li.bat.fours}×4 ${li.bat.sixes}×6`)}
+        </div>
+      </div>
+      <button class="primary" onclick="App.continueLiveInnings()">Continue</button>
+    `);
+    return;
+  }
+  screen(`
+    ${masthead()}
+    <div class="card">
+      <div class="section-title" style="text-align:center;">Batting — spell ${li.battingPhase + 1}/${LIVE_PHASES} vs ${li.fx.opponent}</div>
+      <div class="empty-note" style="padding:4px 0 0;">${li.battingPhase === 0 ? "You're at the crease." : `${li.bat.runs} off ${li.bat.balls} so far.`}</div>
+    </div>
+    <div class="card">
+      <div class="section-title">How do you play this spell?</div>
+      <div class="stack" style="margin-top:8px;">
+        ${Object.keys(BATTING_APPROACHES).map(k => `
+          <button class="secondary" onclick="App.chooseBattingPhase('${k}')">${k === "Cautious" ? "🛡️" : k === "Aggressive" ? "💥" : "🔄"} ${k} — ${BATTING_APPROACHES[k].desc}</button>
+        `).join("")}
+      </div>
+    </div>
+    <button class="link-btn" onclick="App.quickSimLiveInnings()" style="align-self:center;">⏩ Quick-sim the rest of this match</button>
+  `);
+}
+
+function renderLiveBowling() {
+  const li = window.__live;
+  const p = state;
+  applyCurrentTheme(p);
+  if (li.revealing) {
+    const seg = li.lastBowlSeg;
+    screen(`
+      ${masthead()}
+      <div class="card">
+        <div class="section-title" style="text-align:center;">Bowling — spell ${li.bowlingPhase}/${LIVE_PHASES}</div>
+        <div class="result-figures">
+          <div class="big">${seg.wickets}/${seg.runsConceded}</div>
+          <div class="sub">${seg.overs} over${seg.overs === 1 ? "" : "s"}</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="section-title">Figures so far</div>
+        <div class="stat-grid" style="margin-top:8px;">
+          ${ratingBar("Overs", li.bowl.overs)}
+          ${ratingBar("Wickets", li.bowl.wickets)}
+          ${ratingBar("Runs", li.bowl.runsConceded)}
+        </div>
+      </div>
+      <button class="primary" onclick="App.continueLiveInnings()">Continue</button>
+    `);
+    return;
+  }
+  screen(`
+    ${masthead()}
+    <div class="card">
+      <div class="section-title" style="text-align:center;">Bowling — spell ${li.bowlingPhase + 1}/${LIVE_PHASES} vs ${li.fx.opponent}</div>
+      <div class="empty-note" style="padding:4px 0 0;">${li.bowlingPhase === 0 ? "You've got the ball." : `${li.bowl.wickets}/${li.bowl.runsConceded} from ${li.bowl.overs} so far.`}</div>
+    </div>
+    <div class="card">
+      <div class="section-title">How do you bowl this spell?</div>
+      <div class="stack" style="margin-top:8px;">
+        ${Object.keys(BOWLING_APPROACHES).map(k => `
+          <button class="secondary" onclick="App.chooseBowlingPhase('${k}')">${k === "Contain" ? "🔒" : k === "Attack" ? "🎯" : "🔁"} ${k} — ${BOWLING_APPROACHES[k].desc}</button>
+        `).join("")}
+      </div>
+    </div>
+    <button class="link-btn" onclick="App.quickSimLiveInnings()" style="align-self:center;">⏩ Quick-sim the rest of this match</button>
   `);
 }
 
@@ -2100,14 +2208,103 @@ const App = {
     renderMatchSetup(kind);
   },
   setTossDecision(d) { window.__matchToss.decision = d; renderMatchSetup(window.__matchSetupKind); },
-  setBattingApproach(k) { state.battingApproach = k; save(); renderMatchSetup(window.__matchSetupKind); },
-  setBowlingApproach(k) { state.bowlingApproach = k; save(); renderMatchSetup(window.__matchSetupKind); },
   confirmPlayMatch(kind) {
     const toss = window.__matchToss;
     if (toss && toss.wonToss && !toss.decision) return;
-    if (kind === "domestic") return App.playMatch();
-    if (kind === "franchise") return App.playFranchise();
-    return App.playIntl();
+    if (kind === "intl") {
+      const p = state;
+      const fx = p.intlFixtures[p.intlIndex];
+      if (fx && (p.formatCaps[fx.fmt] || 0) === 0 && !p.debutPending) {
+        p.debutPending = fx.fmt;
+        save();
+        return renderDebut(fx.fmt);
+      }
+    }
+    App.startLiveInnings(kind);
+  },
+
+  startLiveInnings(kind) {
+    const p = state;
+    const fx = currentFixtureFor(kind);
+    if (!fx) return renderHub();
+    const doesBat = p.role !== "Bowler" || Math.random() < 0.85;
+    const doesBowl = p.role === "Bowler" || p.role === "All-rounder";
+    window.__live = {
+      kind, fx, cond: matchConditionsFor(p),
+      doesBat, doesBowl,
+      battingPhase: 0, bowlingPhase: 0,
+      battingDone: !doesBat, bowlingDone: !doesBowl,
+      bat: { runs: 0, balls: 0, fours: 0, sixes: 0, out: false },
+      bowl: { overs: 0, wickets: 0, runsConceded: 0 },
+      tossNote: tossNoteFor(window.__matchToss),
+      revealing: false,
+    };
+    window.__matchToss = null;
+    App.advanceLiveInnings();
+  },
+  advanceLiveInnings() {
+    const li = window.__live;
+    if (!li.battingDone) return renderLiveBatting();
+    if (!li.bowlingDone) return renderLiveBowling();
+    App.finalizeLiveInnings();
+  },
+  continueLiveInnings() { window.__live.revealing = false; App.advanceLiveInnings(); },
+  chooseBattingPhase(k) {
+    const p = state;
+    const li = window.__live;
+    const effRating = (p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult;
+    const seg = simulateBattingPhase(effRating, li.fx.oppStrength, li.fx.fmt, k);
+    li.bat.runs += seg.runs; li.bat.balls += seg.balls; li.bat.fours += seg.fours; li.bat.sixes += seg.sixes;
+    li.battingPhase++;
+    li.lastBatSeg = seg;
+    if (seg.out || li.battingPhase >= LIVE_PHASES) { li.bat.out = seg.out; li.battingDone = true; }
+    li.revealing = true;
+    state.battingApproach = k; save();
+    renderLiveBatting();
+  },
+  chooseBowlingPhase(k) {
+    const p = state;
+    const li = window.__live;
+    const effRating = p.bowl * li.cond.bowlMult;
+    const seg = simulateBowlingPhase(effRating, li.fx.oppStrength, li.fx.fmt, k, li.bowlingPhase);
+    li.bowl.overs += seg.overs; li.bowl.wickets += seg.wickets; li.bowl.runsConceded += seg.runsConceded;
+    li.bowlingPhase++;
+    li.lastBowlSeg = seg;
+    if (li.bowlingPhase >= LIVE_PHASES) li.bowlingDone = true;
+    li.revealing = true;
+    state.bowlingApproach = k; save();
+    renderLiveBowling();
+  },
+  quickSimLiveInnings() {
+    const li = window.__live;
+    const p = state;
+    const perf = {};
+    if (li.doesBat && !li.bat.out && li.battingPhase === 0) {
+      Object.assign(perf, simulateBatting((p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult, li.fx.oppStrength, li.fx.fmt, p.battingApproach || "Balanced"));
+    } else if (li.doesBat) {
+      perf.batted = true; perf.runs = li.bat.runs; perf.balls = Math.max(li.bat.balls, 1); perf.fours = li.bat.fours; perf.sixes = li.bat.sixes; perf.out = li.bat.out;
+    }
+    if (li.doesBowl && li.bowlingPhase === 0) {
+      Object.assign(perf, simulateBowling(p.bowl * li.cond.bowlMult, li.fx.oppStrength, li.fx.fmt, p.bowlingApproach || "Balanced"));
+    } else if (li.doesBowl) {
+      perf.bowled = true; perf.overs = li.bowl.overs; perf.wickets = li.bowl.wickets; perf.runsConceded = li.bowl.runsConceded;
+    }
+    App.resolveLiveInnings(perf);
+  },
+  finalizeLiveInnings() {
+    const li = window.__live;
+    const perf = {};
+    if (li.doesBat) Object.assign(perf, { batted: true, runs: li.bat.runs, balls: Math.max(li.bat.balls, 1), fours: li.bat.fours, sixes: li.bat.sixes, out: li.bat.out });
+    if (li.doesBowl) Object.assign(perf, { bowled: true, overs: li.bowl.overs, wickets: li.bowl.wickets, runsConceded: li.bowl.runsConceded });
+    App.resolveLiveInnings(perf);
+  },
+  resolveLiveInnings(perf) {
+    const li = window.__live;
+    if (li.kind === "domestic") playDomesticMatch(perf, li.tossNote);
+    else if (li.kind === "franchise") playFranchiseMatch(perf, li.tossNote);
+    else playIntlMatch(perf, li.tossNote);
+    window.__live = null;
+    renderMatchResult();
   },
 
   stayAtClub() { window.__transferOffers = null; App.advanceEventQueue(); },
@@ -2123,7 +2320,6 @@ const App = {
     App.advanceEventQueue();
   },
 
-  playMatch() { playDomesticMatch(); renderMatchResult(); },
   simRestSeason() { simRestOfDomesticSeason(); App.afterDomesticDone(); },
   afterDomesticDone() {
     const p = state;
@@ -2136,24 +2332,11 @@ const App = {
     renderSeasonSummary();
   },
 
-  playFranchise() { playFranchiseMatch(); renderMatchResult(); },
   simRestFranchise() { simRestOfFranchise(); renderFranchiseSummary(); },
 
-  playIntl() {
-    const p = state;
-    const fx = p.intlFixtures[p.intlIndex];
-    if (fx && (p.formatCaps[fx.fmt] || 0) === 0 && !p.debutPending) {
-      p.debutPending = fx.fmt;
-      save();
-      return renderDebut(fx.fmt);
-    }
-    playIntlMatch();
-    renderMatchResult();
-  },
   confirmDebutAndPlay() {
     state.debutPending = null;
-    playIntlMatch();
-    renderMatchResult();
+    App.startLiveInnings("intl");
   },
   simRestIntl() { simRestOfIntl(); renderIntlSummary(); },
 
