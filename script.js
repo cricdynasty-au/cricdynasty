@@ -136,6 +136,54 @@ function sponsorTierFor(p) {
   if (p.reputation >= 40 || (p.caps.domestic + p.caps.intl + p.caps.franchise) >= 20) return 2;
   return 1;
 }
+const SPONSOR_TIER_VALUE = { 1: 5000, 2: 20000, 3: 75000 };
+
+/* ================= money ================= */
+
+function formatMoney(n) {
+  n = Math.round(n || 0);
+  if (n >= 1000000) return `$${(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `$${Math.round(n / 1000)}k`;
+  return `$${n}`;
+}
+
+function contractSalaryFor(kind, mod, reputation) {
+  const base = kind === "FRANCHISE" ? 35000 : 15000;
+  const prestigeMult = 1 + (mod / 10) * 0.4;
+  const repMult = 1 + (reputation != null ? reputation : 20) / 130;
+  return Math.round((base * prestigeMult * repMult) / 500) * 500;
+}
+
+function overseasFeeFor(reputation) {
+  const repMult = 1 + (reputation != null ? reputation : 45) / 90;
+  return Math.round((60000 * repMult) / 1000) * 1000;
+}
+
+// tiered per-match/appearance fees, plus milestone bonuses scaled by competition prestige
+const MATCH_FEE = { domestic: 500, franchise: 2000, overseas: 6000, TEST: 10000, ODI: 6000, T20: 4000 };
+const BONUS_BASE = { fifty: 1000, hundred: 4000, threeWkt: 1000, fiveWkt: 4000, win: 800 };
+const BONUS_TIER_MULT = { domestic: 0.3, franchise: 0.6, overseas: 1, intl: 1.2 };
+const TROPHY_BONUS = { domestic: 15000, major: 150000 };
+
+function awardMatchEarnings(tier, fmt, perf, won) {
+  const p = state;
+  const fee = tier === "intl" ? (MATCH_FEE[fmt] || MATCH_FEE.T20) : MATCH_FEE[tier];
+  const mult = BONUS_TIER_MULT[tier];
+  let bonus = 0;
+  const innScores = [];
+  if (perf.batted) innScores.push(perf.runs);
+  if (perf.innings2) innScores.push(perf.innings2.runs);
+  innScores.forEach(r => { if (r >= 100) bonus += BONUS_BASE.hundred; else if (r >= 50) bonus += BONUS_BASE.fifty; });
+  if (perf.bowled) {
+    if (perf.wickets >= 5) bonus += BONUS_BASE.fiveWkt;
+    else if (perf.wickets >= 3) bonus += BONUS_BASE.threeWkt;
+  }
+  if (won) bonus += BONUS_BASE.win;
+  const total = Math.round(fee + bonus * mult);
+  p.earnings = (p.earnings || 0) + total;
+  p.seasonEarnings = (p.seasonEarnings || 0) + total;
+  return total;
+}
 
 const WHEEL_SEGMENTS = [
   { key: "hot_streak", icon: "🔥", label: "Hot Streak", kind: "boost", color: "#e8935d" },
@@ -146,7 +194,7 @@ const WHEEL_SEGMENTS = [
 
 const DB_KEY = "cricDynastyDB";
 const LAST_USER_KEY = "cricDynastyLastUser";
-const SAVE_VERSION = 5;
+const SAVE_VERSION = 6;
 
 const MAX_SEASONS = 20;
 const MATCHES_PER_SEASON = 10;
@@ -201,18 +249,25 @@ function emptyStatBlock() {
   };
 }
 
+// one real innings' worth of batting — kept separate from addStat so a match with
+// two innings (Test/FC) can credit each innings' own milestones instead of a blended total
+function addBattingInnings(block, inn) {
+  block.innings += 1;
+  block.runs += inn.runs;
+  block.balls += inn.balls;
+  block.fours += inn.fours;
+  block.sixes += inn.sixes;
+  if (inn.out) block.outs += 1;
+  if (inn.runs >= 100) block.hundreds += 1;
+  else if (inn.runs >= 50) block.fifties += 1;
+  if (inn.runs > block.highScore) block.highScore = inn.runs;
+}
+
 function addStat(block, extra) {
   block.matches += 1;
   if (extra.batted) {
-    block.innings += 1;
-    block.runs += extra.runs;
-    block.balls += extra.balls;
-    block.fours += extra.fours;
-    block.sixes += extra.sixes;
-    if (extra.out) block.outs += 1;
-    if (extra.runs >= 100) block.hundreds += 1;
-    else if (extra.runs >= 50) block.fifties += 1;
-    if (extra.runs > block.highScore) block.highScore = extra.runs;
+    addBattingInnings(block, { runs: extra.runs, balls: extra.balls, fours: extra.fours, sixes: extra.sixes, out: extra.out });
+    if (extra.innings2) addBattingInnings(block, extra.innings2);
   }
   if (extra.bowled) {
     block.overs += extra.overs;
@@ -280,7 +335,8 @@ const BOWLING_APPROACHES = {
   Attack: { wicketMult: 1.32, econAdj: 1.2, label: "Attack", desc: "Bowl for wickets — more threat, more boundaries conceded." },
 };
 
-function simulateBatting(rating, oppStrength, fmt, approach) {
+// Tests/first-class matches give a batter up to two real innings — this rolls one
+function simulateBattingInnings(rating, oppStrength, fmt, approach) {
   const cfg = BATTING_MEAN[fmt] || BATTING_MEAN.T20;
   const app = BATTING_APPROACHES[approach] || BATTING_APPROACHES.Balanced;
   const longFmt = fmt === "TEST" || fmt === "FC";
@@ -295,7 +351,20 @@ function simulateBatting(rating, oppStrength, fmt, approach) {
   const balls = Math.max(1, Math.round((runs / sr) * 100));
   const fours = clamp(Math.round((runs * rand(0.12, 0.28)) / 4), 0, 20);
   const sixes = clamp(Math.round((runs * rand(0.02, 0.12)) / 6), 0, 10);
-  return { batted: true, runs, balls: Math.max(balls, fours * 4 + sixes * 6), fours, sixes, out };
+  return { runs, balls: Math.max(balls, fours * 4 + sixes * 6), fours, sixes, out };
+}
+
+// most Tests/FC matches see a batter come out twice — but not always (innings defeat, rain, a declaration)
+const SECOND_INNINGS_CHANCE = 0.65;
+
+function simulateBatting(rating, oppStrength, fmt, approach) {
+  const longFmt = fmt === "TEST" || fmt === "FC";
+  const inn1 = simulateBattingInnings(rating, oppStrength, fmt, approach);
+  const result = { batted: true, ...inn1 };
+  if (longFmt && Math.random() < SECOND_INNINGS_CHANCE) {
+    result.innings2 = simulateBattingInnings(rating, oppStrength, fmt, approach);
+  }
+  return result;
 }
 
 function simulateBowling(rating, oppStrength, fmt, approach) {
@@ -324,6 +393,16 @@ const BATTING_PHASE_NAMES = {
   FRANCHISE: ["Powerplay", "Middle Overs", "Death Overs"],
 };
 function battingPhaseName(fmt, index) { return (BATTING_PHASE_NAMES[fmt] || BATTING_PHASE_NAMES.T20)[index] || `Phase ${index + 1}`; }
+
+// assembles the final live-match batting perf, folding in a completed 1st innings if one was stashed
+function finalBattingPerf(li) {
+  if (!li.doesBat) return {};
+  const cur = { batted: true, runs: li.bat.runs, balls: Math.max(li.bat.balls, 1), fours: li.bat.fours, sixes: li.bat.sixes, out: li.bat.out };
+  if (li.bat1) {
+    return { batted: true, runs: li.bat1.runs, balls: Math.max(li.bat1.balls, 1), fours: li.bat1.fours, sixes: li.bat1.sixes, out: li.bat1.out, innings2: cur };
+  }
+  return cur;
+}
 
 // one third of an innings — used by the live, phase-by-phase play flow
 function simulateBattingPhase(effRating, oppStrength, fmt, approach) {
@@ -451,6 +530,10 @@ function milestonesFor(perf) {
   if (perf.batted) {
     if (perf.runs >= 100) out.push(`💯 Century! ${perf.runs}(${perf.balls})`);
     else if (perf.runs >= 50) out.push(`🔥 Half-century — ${perf.runs}(${perf.balls})`);
+  }
+  if (perf.innings2) {
+    if (perf.innings2.runs >= 100) out.push(`💯 Century! ${perf.innings2.runs}(${perf.innings2.balls}) — 2nd innings`);
+    else if (perf.innings2.runs >= 50) out.push(`🔥 Half-century — ${perf.innings2.runs}(${perf.innings2.balls}) — 2nd innings`);
   }
   if (perf.bowled && perf.wickets >= 5) out.push(`🎯 Five-wicket haul! ${perf.wickets}/${perf.runsConceded}`);
   else if (perf.bowled && perf.wickets >= 3) out.push(`👏 ${perf.wickets}-wicket spell`);
@@ -604,6 +687,10 @@ function startSeason() {
   p.seasonIntlStats = emptyStatBlock();
   p.seasonFranchiseStats = emptyStatBlock();
   p.seasonOverseasStats = emptyStatBlock();
+  p.seasonEarnings = 0;
+  const salaryThisSeason = (p.contract ? p.contract.salary : 0) + (p.franchiseContract ? p.franchiseContract.salary : 0);
+  p.earnings = (p.earnings || 0) + salaryThisSeason;
+  p.seasonEarnings += salaryThisSeason;
   p.domesticDone = false; p.intlDone = false; p.franchiseDone = p.format !== "ALL_ROUND";
   p.overseasPending = false; p.overseasDone = true; p.overseasOffer = null;
   p.selectedThisSeason = false;
@@ -633,6 +720,7 @@ function playDomesticMatch(precomputedPerf, precomputedTossNote) {
   p.lastMatchResult = { kind: "domestic", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tossNote };
   p.matchIndex += 1;
   gainReputation(perf, won);
+  awardMatchEarnings("domestic", fx.fmt, perf, won);
   if (p.matchIndex >= p.fixtures.length) finishDomesticSeason();
   save();
 }
@@ -647,6 +735,7 @@ function simRestOfDomesticSeason() {
     addStat(p.seasonDomStats, perf); addStat(p.stats.domestic, perf);
     p.caps.domestic += 1;
     gainReputation(perf, won);
+    awardMatchEarnings("domestic", fx.fmt, perf, won);
     p.matchIndex += 1;
   }
   p.lastMatchResult = null;
@@ -670,6 +759,8 @@ function finishDomesticSeason() {
   if (champion) {
     const label = p.domesticKind === "FRANCHISE" ? "T20 League Title" : "First-Class Championship";
     p.trophies.push({ season: p.season, name: `${p.team} — ${label}${p.isDomesticCaptain ? " (as captain)" : ""}`, icon: "🏆" });
+    p.earnings = (p.earnings || 0) + TROPHY_BONUS.domestic;
+    p.seasonEarnings = (p.seasonEarnings || 0) + TROPHY_BONUS.domestic;
   }
   const s = p.seasonDomStats;
   let award = null;
@@ -701,7 +792,7 @@ function setupOverseasPhase() {
   if (triggered) {
     const leagueCountry = choice(COUNTRIES.map(c => c.name).filter(n => n !== p.country && T20_FRANCHISES[n]));
     const team = choice(T20_FRANCHISES[leagueCountry]);
-    p.overseasOffer = { team, country: leagueCountry, league: OVERSEAS_LEAGUE_NAME[leagueCountry] || `${leagueCountry} League` };
+    p.overseasOffer = { team, country: leagueCountry, league: OVERSEAS_LEAGUE_NAME[leagueCountry] || `${leagueCountry} League`, fee: overseasFeeFor(p.reputation) };
     p.overseasPending = true;
     p.overseasDone = false;
     save();
@@ -716,6 +807,8 @@ function setupOverseasPhase() {
 function playOverseasStint() {
   const p = state;
   const offer = p.overseasOffer;
+  p.earnings = (p.earnings || 0) + offer.fee;
+  p.seasonEarnings = (p.seasonEarnings || 0) + offer.fee;
   const pool = T20_FRANCHISES[offer.country].filter(t => t !== offer.team);
   const fixtures = pickN(pool, Math.min(4, pool.length)).map(opp => ({ opponent: opp, oppStrength: randInt(45, 78), fmt: "FRANCHISE", ground: groundFor(offer.country) }));
   fixtures.forEach(fx => {
@@ -724,6 +817,7 @@ function playOverseasStint() {
     addStat(p.seasonOverseasStats, perf); addStat(p.stats.overseas, perf);
     p.caps.overseas = (p.caps.overseas || 0) + 1;
     gainReputation(perf, won);
+    awardMatchEarnings("overseas", fx.fmt, perf, won);
   });
   p.overseasDone = true;
   p.lastOverseasSummary = { stats: { ...p.seasonOverseasStats }, team: offer.team, league: offer.league, country: offer.country };
@@ -758,6 +852,7 @@ function playFranchiseMatch(precomputedPerf, precomputedTossNote) {
   p.lastMatchResult = { kind: "franchise", fmt: "FRANCHISE", opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tossNote };
   p.franchiseIndex += 1;
   gainReputation(perf, won);
+  awardMatchEarnings("franchise", "FRANCHISE", perf, won);
   if (p.franchiseIndex >= p.franchiseFixtures.length) finishFranchiseStint();
   save();
 }
@@ -772,6 +867,7 @@ function simRestOfFranchise() {
     addStat(p.seasonFranchiseStats, perf); addStat(p.stats.franchise, perf);
     p.caps.franchise += 1;
     gainReputation(perf, won);
+    awardMatchEarnings("franchise", "FRANCHISE", perf, won);
     p.franchiseIndex += 1;
   }
   p.lastMatchResult = null;
@@ -860,6 +956,7 @@ function playIntlMatch(precomputedPerf, precomputedTossNote) {
   p.lastMatchResult = { kind: "intl", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tag: fx.tag, tossNote };
   p.intlIndex += 1;
   gainReputation(perf, won);
+  awardMatchEarnings("intl", fx.fmt, perf, won);
   updateTournamentTable(fx.opponent, won);
   if (p.intlIndex >= p.intlFixtures.length) finishInternationalWindow();
   save();
@@ -876,6 +973,7 @@ function simRestOfIntl() {
     p.caps.intl += 1;
     p.formatCaps[fx.fmt] = (p.formatCaps[fx.fmt] || 0) + 1;
     gainReputation(perf, won);
+    awardMatchEarnings("intl", fx.fmt, perf, won);
     updateTournamentTable(fx.opponent, won);
     p.intlIndex += 1;
   }
@@ -912,7 +1010,11 @@ function finishInternationalWindow() {
       if (finishTag !== "Champions" && Math.random() < 0.025) finishTag = "Champions";
       if (finishTag === "Champions") trophy = { season: p.season, name: `${p.bigEvent.name} — Champions (${p.country})${captainNote}`, icon: "🏆" };
     }
-    if (trophy) p.trophies.push(trophy);
+    if (trophy) {
+      p.trophies.push(trophy);
+      p.earnings = (p.earnings || 0) + TROPHY_BONUS.major;
+      p.seasonEarnings = (p.seasonEarnings || 0) + TROPHY_BONUS.major;
+    }
     p.lastIntlSummary = { stats: { ...s }, wins, bigEvent: true, eventName: p.bigEvent.name, finishTag, trophy, finalTable: p.tournamentTable };
   } else {
     p.lastIntlSummary = { stats: { ...s }, wins, bigEvent: false };
@@ -930,8 +1032,10 @@ function finishInternationalWindow() {
 function gainReputation(perf, won) {
   const p = state;
   let delta = won ? 0.4 : -0.1;
-  if (perf.batted && perf.runs >= 100) delta += 4;
-  else if (perf.batted && perf.runs >= 50) delta += 1.5;
+  const innScores = [];
+  if (perf.batted) innScores.push(perf.runs);
+  if (perf.innings2) innScores.push(perf.innings2.runs);
+  innScores.forEach(r => { if (r >= 100) delta += 4; else if (r >= 50) delta += 1.5; });
   if (perf.bowled && perf.wickets >= 5) delta += 4;
   else if (perf.bowled && perf.wickets >= 3) delta += 1.2;
   p.reputation = clamp(p.reputation + delta, 0, 100);
@@ -1371,7 +1475,7 @@ function renderCreate() {
 
 /* ================= club offers (creation + transfer window) ================= */
 
-function generateClubOffers(country, kind, excludeTeam, n) {
+function generateClubOffers(country, kind, excludeTeam, n, reputation) {
   const pool = teamPoolFor(country, kind).filter(t => t !== excludeTeam);
   const picks = pickN(pool, Math.min(n || 3, pool.length));
   return picks.map(team => {
@@ -1380,7 +1484,8 @@ function generateClubOffers(country, kind, excludeTeam, n) {
     if (mod >= 6) { tag = "Title Contenders"; desc = "A stacked squad with real expectations — harder to force your way in, bigger trophies if you do."; }
     else if (mod <= -6) { tag = "Rebuilding Project"; desc = "A young side short on depth — an easier path to a regular starting spot and captaincy, but titles will take longer."; }
     else { tag = "Established Mid-Table Side"; desc = "A steady, competitive outfit with no fixed pecking order."; }
-    return { team, mod, tag, desc };
+    const salary = contractSalaryFor(kind, mod, reputation);
+    return { team, mod, tag, desc, salary };
   });
 }
 
@@ -1403,6 +1508,7 @@ function renderClubChoice() {
           <div>
             <div class="format-title">${o.team} <span class="badge" style="margin-left:6px;">${o.tag}</span></div>
             <div class="format-desc">${o.desc}</div>
+            <div class="empty-note" style="padding-top:4px;">💰 ${formatMoney(o.salary)}/season</div>
           </div>
         </div>
       `).join("")}
@@ -1427,6 +1533,7 @@ function renderFranchiseChoice() {
           <div>
             <div class="format-title">${o.team} <span class="badge" style="margin-left:6px;">${o.tag}</span></div>
             <div class="format-desc">${o.desc}</div>
+            <div class="empty-note" style="padding-top:4px;">💰 ${formatMoney(o.salary)}/season</div>
           </div>
         </div>
       `).join("")}
@@ -1451,6 +1558,7 @@ function renderTransferWindow() {
         <div>
           <div class="format-title">Stay at ${p.team}${p.isDomesticCaptain ? " — keep the captaincy" : ""}</div>
           <div class="format-desc">Familiar surroundings, no disruption to your role.</div>
+          <div class="empty-note" style="padding-top:4px;">💰 ${formatMoney(p.contract ? p.contract.salary : 0)}/season</div>
         </div>
       </div>
       ${offers.map((o, idx) => `
@@ -1459,6 +1567,7 @@ function renderTransferWindow() {
           <div>
             <div class="format-title">Join ${o.team} <span class="badge" style="margin-left:6px;">${o.tag}</span></div>
             <div class="format-desc">${o.desc}${p.isDomesticCaptain ? " You'd give up the captaincy and have to earn it again." : ""}</div>
+            <div class="empty-note" style="padding-top:4px;">💰 ${formatMoney(o.salary)}/season</div>
           </div>
         </div>
       `).join("")}
@@ -1520,18 +1629,21 @@ function renderLiveBatting() {
   const li = window.__live;
   const p = state;
   applyCurrentTheme(p);
+  const inningsTag = li.battingInningsNum === 2 ? "2nd Innings · " : "";
   if (li.revealing) {
     const seg = li.lastBatSeg;
     const doneName = battingPhaseName(li.fx.fmt, li.battingPhase - 1);
     screen(`
       ${masthead()}
       <div class="card">
-        <div class="section-title" style="text-align:center;">Batting — ${doneName}</div>
+        <div class="section-title" style="text-align:center;">Batting — ${inningsTag}${doneName}</div>
         <div class="result-figures">
           <div class="big">${seg.out ? `${seg.runs}(${seg.balls})` : `+${seg.runs}(${seg.balls})`}</div>
           <div class="sub">${seg.out ? "OUT!" : `${seg.fours}x4, ${seg.sixes}x6`}</div>
         </div>
-        ${seg.out ? `<div class="badge" style="display:block;text-align:center;width:fit-content;margin:6px auto 0;background:rgba(232,93,117,0.15);color:var(--accent-3);">Innings over</div>` : ""}
+        ${li.pendingSecondInnings
+          ? `<div class="badge" style="display:block;text-align:center;width:fit-content;margin:6px auto 0;background:rgba(95,217,122,0.15);color:var(--accent);">🔁 1st innings done — you'll bat again</div>`
+          : seg.out ? `<div class="badge" style="display:block;text-align:center;width:fit-content;margin:6px auto 0;background:rgba(232,93,117,0.15);color:var(--accent-3);">Innings over</div>` : ""}
       </div>
       <div class="card">
         <div class="section-title">Innings so far</div>
@@ -1549,8 +1661,8 @@ function renderLiveBatting() {
   screen(`
     ${masthead()}
     <div class="card">
-      <div class="section-title" style="text-align:center;">Batting — ${upName} vs ${li.fx.opponent}</div>
-      <div class="empty-note" style="padding:4px 0 0;">${li.battingPhase === 0 ? "You're at the crease." : `${li.bat.runs} off ${li.bat.balls} so far.`}</div>
+      <div class="section-title" style="text-align:center;">Batting — ${inningsTag}${upName} vs ${li.fx.opponent}</div>
+      <div class="empty-note" style="padding:4px 0 0;">${li.battingPhase === 0 ? (li.battingInningsNum === 2 ? "You're at the crease again for the 2nd innings." : "You're at the crease.") : `${li.bat.runs} off ${li.bat.balls} so far.`}</div>
     </div>
     <div class="card">
       <div class="section-title">How do you play the ${upName.toLowerCase()}?</div>
@@ -1758,6 +1870,13 @@ function renderHubSidebar() {
       </div>
       <div class="empty-note" style="padding:6px 0 0;">Reputation</div>
     </div>
+    <div class="card">
+      <div class="section-title">Career earnings</div>
+      <div class="stat-grid two" style="margin-top:10px;">
+        ${ratingBar("Career", formatMoney(p.earnings))}
+        ${ratingBar("This season", formatMoney(p.seasonEarnings))}
+      </div>
+    </div>
   `;
 }
 
@@ -1939,12 +2058,17 @@ function renderMatchResult() {
   const r = p.lastMatchResult;
   const perf = r.perf;
   let figureBig = "", figureSub = "";
+  const battingFigure = perf.innings2
+    ? `${perf.runs}${perf.out ? "" : "*"} & ${perf.innings2.runs}${perf.innings2.out ? "" : "*"}`
+    : `${perf.runs}${perf.out ? "" : "*"}`;
   if (perf.batted && perf.bowled) {
-    figureBig = `${perf.runs}(${perf.balls}) &nbsp;/&nbsp; ${perf.wickets}-${perf.runsConceded}`;
+    figureBig = `${battingFigure} &nbsp;/&nbsp; ${perf.wickets}-${perf.runsConceded}`;
     figureSub = `Batting & bowling figures`;
   } else if (perf.batted) {
-    figureBig = `${perf.runs}${perf.out ? "" : "*"}`;
-    figureSub = `off ${perf.balls} balls · ${perf.fours}x4, ${perf.sixes}x6`;
+    figureBig = battingFigure;
+    figureSub = perf.innings2
+      ? `Two innings · ${perf.balls + perf.innings2.balls} balls · ${perf.fours + perf.innings2.fours}x4, ${perf.sixes + perf.innings2.sixes}x6`
+      : `off ${perf.balls} balls · ${perf.fours}x4, ${perf.sixes}x6`;
   } else if (perf.bowled) {
     figureBig = `${perf.wickets}/${perf.runsConceded}`;
     figureSub = `${perf.overs} overs`;
@@ -1997,6 +2121,13 @@ function renderSeasonSummary() {
       </div>
       ${sum.award ? `<div class="milestone-banner" style="margin-top:12px;">⭐ ${sum.award}</div>` : ""}
     </div>
+    <div class="card">
+      <div class="section-title">Money</div>
+      <div class="stat-grid two" style="margin-top:10px;">
+        ${ratingBar("Earned this season", formatMoney(p.seasonEarnings))}
+        ${ratingBar("Career total", formatMoney(p.earnings))}
+      </div>
+    </div>
     <button class="primary" onclick="App.continueFromSeasonSummary()">Continue</button>
   `);
 }
@@ -2041,6 +2172,7 @@ function renderOverseasOffer() {
       <div>
         <div class="format-title">${o.team}</div>
         <div class="format-desc">${o.league} · ${o.country}</div>
+        <div class="empty-note" style="padding-top:4px;">💰 ${formatMoney(o.fee)} contract fee</div>
       </div>
     </div>
     <div class="stack">
@@ -2110,7 +2242,8 @@ function renderSponsorOffer() {
   const tier = sponsorTierFor(p);
   const brands = pickN(SPONSOR_TIERS[tier], Math.min(3, SPONSOR_TIERS[tier].length));
   const perks = pickN(SPONSOR_PERKS, brands.length);
-  const options = brands.map((name, idx) => ({ name, ...perks[idx % perks.length] }));
+  const value = SPONSOR_TIER_VALUE[tier];
+  const options = brands.map((name, idx) => ({ name, value, ...perks[idx % perks.length] }));
   window.__sponsorOptions = options;
   screen(`
     ${masthead()}
@@ -2126,6 +2259,7 @@ function renderSponsorOffer() {
           <div>
             <div class="format-title">${s.name}</div>
             <div class="format-desc">${s.desc}</div>
+            <div class="empty-note" style="padding-top:4px;">💰 ${formatMoney(s.value)} signing bonus</div>
           </div>
         </div>
       `).join("")}
@@ -2240,6 +2374,7 @@ function renderRetirement() {
         ${ratingBar("5W hauls", all.fiveWickets)}
         ${ratingBar("Trophies", p.trophies.length)}
         ${ratingBar("Awards", p.awards.length)}
+        ${ratingBar("Earnings", formatMoney(p.earnings))}
       </div>
     </div>
     <div class="card">
@@ -2360,6 +2495,7 @@ function renderFullRecap() {
         ${ratingBar("5W hauls", all.fiveWickets)}
         ${ratingBar("Trophies", p.trophies.length)}
         ${ratingBar("Awards", p.awards.length)}
+        ${ratingBar("Earnings", formatMoney(p.earnings))}
       </div>
     </div>
     <div class="card">
@@ -2453,14 +2589,14 @@ const App = {
   confirmCreate() {
     if (!draft.name.trim()) return;
     const kind = draft.format === "SHORT" ? "FRANCHISE" : "FC";
-    window.__clubOffers = generateClubOffers(draft.country, kind, null, 3);
+    window.__clubOffers = generateClubOffers(draft.country, kind, null, 3, 20);
     renderClubChoice();
   },
   pickClub(idx) {
     window.__chosenClub = window.__clubOffers[idx];
     window.__clubOffers = null;
     if (draft.format === "ALL_ROUND") {
-      window.__franchiseOffers = generateClubOffers(draft.country, "FRANCHISE", window.__chosenClub.team, 3);
+      window.__franchiseOffers = generateClubOffers(draft.country, "FRANCHISE", window.__chosenClub.team, 3, 20);
       return renderFranchiseChoice();
     }
     App.finalizeCreate();
@@ -2475,8 +2611,11 @@ const App = {
     const nationBaseline = NATION_STRENGTH[state.country] || 70;
     state.team = window.__chosenClub.team;
     state.teamStrength = clamp(Math.round(nationBaseline * 0.55) + window.__chosenClub.mod, 15, 99);
-    if (state.format === "ALL_ROUND") state.franchiseTeam = window.__chosenFranchise.team;
-    else if (state.format === "SHORT") state.franchiseTeam = state.team;
+    state.contract = { team: window.__chosenClub.team, salary: window.__chosenClub.salary };
+    if (state.format === "ALL_ROUND") {
+      state.franchiseTeam = window.__chosenFranchise.team;
+      state.franchiseContract = { team: window.__chosenFranchise.team, salary: window.__chosenFranchise.salary };
+    } else if (state.format === "SHORT") state.franchiseTeam = state.team;
     window.__chosenClub = null; window.__chosenFranchise = null;
     currentSaveId = "save_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
     startSeason();
@@ -2532,6 +2671,7 @@ const App = {
       kind, fx, cond: matchConditionsFor(p),
       doesBat, doesBowl, skippedTestBowling,
       battingPhase: 0, bowlingSpellIndex: 0,
+      battingInningsNum: 1, bat1: null, pendingSecondInnings: false,
       battingDone: !doesBat, bowlingDone: !doesBowl || skippedTestBowling,
       bat: { runs: 0, balls: 0, fours: 0, sixes: 0, out: false },
       bowl: { overs: 0, wickets: 0, runsConceded: 0 },
@@ -2547,7 +2687,19 @@ const App = {
     if (!li.bowlingDone) return renderLiveBowling();
     App.finalizeLiveInnings();
   },
-  continueLiveInnings() { window.__live.revealing = false; App.advanceLiveInnings(); },
+  continueLiveInnings() {
+    const li = window.__live;
+    li.revealing = false;
+    if (li.pendingSecondInnings) {
+      li.pendingSecondInnings = false;
+      li.bat1 = { ...li.bat };
+      li.bat = { runs: 0, balls: 0, fours: 0, sixes: 0, out: false };
+      li.battingPhase = 0;
+      li.battingDone = false;
+      li.battingInningsNum = 2;
+    }
+    App.advanceLiveInnings();
+  },
   chooseBattingPhase(k) {
     const p = state;
     const li = window.__live;
@@ -2556,7 +2708,14 @@ const App = {
     li.bat.runs += seg.runs; li.bat.balls += seg.balls; li.bat.fours += seg.fours; li.bat.sixes += seg.sixes;
     li.battingPhase++;
     li.lastBatSeg = seg;
-    if (seg.out || li.battingPhase >= LIVE_PHASES) { li.bat.out = seg.out; li.battingDone = true; }
+    if (seg.out || li.battingPhase >= LIVE_PHASES) {
+      li.bat.out = seg.out;
+      li.battingDone = true;
+      const longFmt = li.fx.fmt === "TEST" || li.fx.fmt === "FC";
+      if (longFmt && !li.bat1 && li.battingInningsNum === 1) {
+        li.pendingSecondInnings = Math.random() < SECOND_INNINGS_CHANCE;
+      }
+    }
     li.revealing = true;
     state.battingApproach = k; save();
     renderLiveBatting();
@@ -2586,10 +2745,14 @@ const App = {
     const li = window.__live;
     const p = state;
     const perf = {};
-    if (li.doesBat && !li.bat.out && li.battingPhase === 0) {
+    if (li.doesBat && !li.bat.out && li.battingPhase === 0 && !li.bat1) {
       Object.assign(perf, simulateBatting((p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult, li.fx.oppStrength, li.fx.fmt, p.battingApproach || "Balanced"));
+    } else if (li.doesBat && li.bat1 && li.battingPhase === 0 && !li.bat.out && li.bat.balls === 0) {
+      // 1st innings already fully played, 2nd innings not yet started live — simulate it in full
+      const inn2 = simulateBattingInnings((p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult, li.fx.oppStrength, li.fx.fmt, p.battingApproach || "Balanced");
+      Object.assign(perf, { batted: true, runs: li.bat1.runs, balls: Math.max(li.bat1.balls, 1), fours: li.bat1.fours, sixes: li.bat1.sixes, out: li.bat1.out, innings2: inn2 });
     } else if (li.doesBat) {
-      perf.batted = true; perf.runs = li.bat.runs; perf.balls = Math.max(li.bat.balls, 1); perf.fours = li.bat.fours; perf.sixes = li.bat.sixes; perf.out = li.bat.out;
+      Object.assign(perf, finalBattingPerf(li));
     }
     if (li.doesBowl && !li.skippedTestBowling && li.bowlingSpellIndex === 0) {
       Object.assign(perf, simulateBowling(p.bowl * li.cond.bowlMult, li.fx.oppStrength, li.fx.fmt, p.bowlingApproach || "Balanced"));
@@ -2601,7 +2764,7 @@ const App = {
   finalizeLiveInnings() {
     const li = window.__live;
     const perf = {};
-    if (li.doesBat) Object.assign(perf, { batted: true, runs: li.bat.runs, balls: Math.max(li.bat.balls, 1), fours: li.bat.fours, sixes: li.bat.sixes, out: li.bat.out });
+    if (li.doesBat) Object.assign(perf, finalBattingPerf(li));
     if (li.doesBowl) Object.assign(perf, { bowled: true, overs: li.bowl.overs, wickets: li.bowl.wickets, runsConceded: li.bowl.runsConceded });
     App.resolveLiveInnings(perf);
   },
@@ -2623,6 +2786,7 @@ const App = {
     const nationBaseline = NATION_STRENGTH[p.country] || 70;
     p.team = o.team;
     p.teamStrength = clamp(Math.round(nationBaseline * 0.55) + o.mod, 15, 99);
+    p.contract = { team: o.team, salary: o.salary };
     if (p.isDomesticCaptain) p.isDomesticCaptain = false;
     window.__transferOffers = null;
     save();
@@ -2715,7 +2879,7 @@ const App = {
     if (!ev) return App.goToWheel();
     if (ev.type === "sponsor") return renderSponsorOffer();
     if (ev.type === "transfer") {
-      window.__transferOffers = generateClubOffers(state.country, state.domesticKind, state.team, 2);
+      window.__transferOffers = generateClubOffers(state.country, state.domesticKind, state.team, 2, state.reputation);
       return renderTransferWindow();
     }
     if (ev.type === "captainDomestic") return renderCaptaincyOffer("captainDomestic");
@@ -2729,6 +2893,8 @@ const App = {
     p.sponsor = s; p.sponsorHistory.push({ season: p.season, name: s.name });
     if (s.key === "ratingBoost") { p.bat = clamp(p.bat + 3, 1, 99); p.bowl = clamp(p.bowl + 3, 1, 99); }
     if (s.key === "reputationBoost") p.reputation = clamp(p.reputation + 15, 0, 100);
+    p.earnings = (p.earnings || 0) + s.value;
+    p.seasonEarnings = (p.seasonEarnings || 0) + s.value;
     save();
     App.advanceEventQueue();
   },
@@ -2828,6 +2994,7 @@ function freshPlayer(d) {
     isDomesticCaptain: false, isNationalCaptain: false,
     battingApproach: "Balanced", bowlingApproach: "Balanced",
     sponsor: null, sponsorHistory: [],
+    earnings: 0, seasonEarnings: 0, contract: null, franchiseContract: null,
     rankBat: null, rankBowl: null,
     season: 1,
     matchIndex: 0, fixtures: [],
