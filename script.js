@@ -194,7 +194,7 @@ const WHEEL_SEGMENTS = [
 
 const DB_KEY = "cricDynastyDB";
 const LAST_USER_KEY = "cricDynastyLastUser";
-const SAVE_VERSION = 6;
+const SAVE_VERSION = 7;
 
 const MAX_SEASONS = 20;
 const MATCHES_PER_SEASON = 10;
@@ -695,6 +695,7 @@ function startSeason() {
   p.overseasPending = false; p.overseasDone = true; p.overseasOffer = null;
   p.selectedThisSeason = false;
   p.intlFixtures = []; p.intlIndex = 0;
+  p.intlCallup = null; p.worldCupHost = null; p.worldCupSemifinalists = null; p.worldCupOtherSemiPair = null; p.worldCupStage = null;
   p.franchiseFixtures = []; p.franchiseIndex = 0;
   p.lastMatchResult = null; p.lastLeagueFinish = null; p.lastSeasonSummary = null;
   p.lastIntlSummary = null; p.lastFranchiseSummary = null; p.lastOverseasSummary = null;
@@ -882,6 +883,26 @@ function finishFranchiseStint() {
   setupOverseasPhase();
 }
 
+// real bilateral rivalries carry a named Test trophy — everything else just gets a plain series tag
+const RIVALRY_SERIES = {
+  "Australia|England": "The Ashes",
+  "Australia|India": "Border-Gavaskar Trophy",
+  "England|India": "Anderson-Tendulkar Trophy",
+  "Australia|New Zealand": "Trans-Tasman Trophy",
+  "Australia|West Indies": "Frank Worrell Trophy",
+  "England|West Indies": "Wisden Trophy",
+  "England|South Africa": "Basil D'Oliveira Trophy",
+  "India|South Africa": "Freedom Trophy",
+};
+const FMT_SERIES_WORD = { TEST: "Test", ODI: "ODI", T20: "T20I" };
+function seriesNameFor(countryA, countryB, fmt) {
+  if (fmt === "TEST") {
+    const key = [countryA, countryB].sort().join("|");
+    if (RIVALRY_SERIES[key]) return RIVALRY_SERIES[key];
+  }
+  return `${countryB} ${FMT_SERIES_WORD[fmt] || "International"} Series`;
+}
+
 function decideInternationalSelection() {
   const p = state;
   const s = combineStats(p.seasonDomStats, p.seasonFranchiseStats);
@@ -892,6 +913,7 @@ function decideInternationalSelection() {
   if (established) chance = clamp(chance + 0.15, 0.04, 0.96);
   p.selectedThisSeason = Math.random() < chance;
   p.tournamentTable = null;
+  p.intlCallup = null;
   if (p.selectedThisSeason) {
     if (p.bigEvent.active) {
       // you can't headline a World Cup or a Final in a format you've never actually played before
@@ -904,26 +926,113 @@ function decideInternationalSelection() {
       const qualifyChance = clamp((NATION_STRENGTH[p.country] - 38) / 62, 0.04, 0.92);
       if (Math.random() >= qualifyChance) p.bigEvent = { active: false };
     }
-    const games = p.bigEvent.active ? (p.bigEvent.kind === "FINAL" ? 1 : 5) : randInt(3, 4);
     const fmt = p.bigEvent.active ? p.bigEvent.fmt : intlFmtTag(p);
-    const oppPool = OPPONENT_NATIONS_POOL.filter(n => n !== p.country);
-    const isWtcFinal = p.bigEvent.active && p.bigEvent.kind === "FINAL";
-    p.intlFixtures = pickN(oppPool, games).map(opp => ({
-      opponent: opp, oppStrength: randInt(45, 80), played: false,
-      fmt: p.bigEvent.active ? fmt : intlFmtTag(p),
-      tag: p.bigEvent.active ? p.bigEvent.name : "Series",
-      ground: isWtcFinal ? WTC_FINAL_GROUND : (Math.random() < 0.5 ? groundFor(p.country) : groundFor(opp)),
-    }));
-    if (p.bigEvent.active && p.bigEvent.kind === "GROUP") {
-      const opponents = p.intlFixtures.map(f => f.opponent);
-      const extraPool = OPPONENT_NATIONS_POOL.filter(n => n !== p.country && !opponents.includes(n));
-      const extras = pickN(extraPool, Math.min(2, extraPool.length));
-      p.tournamentTable = [p.country, ...opponents, ...extras].map(n => ({ nation: n, played: 0, won: 0, lost: 0, pts: 0 }));
+    if (p.bigEvent.active) {
+      p.intlCallup = { isBigEvent: true, fmt, name: p.bigEvent.name, kind: p.bigEvent.kind };
+    } else {
+      const opp = choice(OPPONENT_NATIONS_POOL.filter(n => n !== p.country));
+      p.intlCallup = { isBigEvent: false, fmt, opponent: opp, name: seriesNameFor(p.country, opp, fmt) };
     }
   } else {
     p.intlDone = true;
   }
   save();
+}
+
+// only called once the player accepts the call-up — builds the actual fixtures for the window
+function buildIntlFixturesFromCallup() {
+  const p = state;
+  const c = p.intlCallup;
+  const fmt = c.fmt;
+  if (c.isBigEvent && c.kind === "FINAL") {
+    p.intlFixtures = [{
+      opponent: choice(OPPONENT_NATIONS_POOL.filter(n => n !== p.country)),
+      oppStrength: randInt(55, 85), played: false, fmt, tag: c.name, ground: WTC_FINAL_GROUND,
+    }];
+  } else if (c.isBigEvent) {
+    // a World Cup is hosted in one nation for the whole tournament, played across that country's grounds
+    const host = Math.random() < 0.3 ? p.country : choice(OPPONENT_NATIONS_POOL);
+    p.worldCupHost = host;
+    const oppPool = OPPONENT_NATIONS_POOL.filter(n => n !== p.country);
+    const groupOpponents = pickN(oppPool, 5);
+    p.intlFixtures = groupOpponents.map(opp => ({
+      opponent: opp, oppStrength: randInt(45, 80), played: false, fmt, tag: c.name, stage: "GROUP", ground: groundFor(host),
+    }));
+    const extraPool = oppPool.filter(n => !groupOpponents.includes(n));
+    const extras = pickN(extraPool, Math.min(2, extraPool.length));
+    p.tournamentTable = [p.country, ...groupOpponents, ...extras].map(n => ({ nation: n, played: 0, won: 0, lost: 0, pts: 0 }));
+  } else {
+    // a bilateral series — one opponent, hosted by one side, played across a few of their grounds
+    const games = fmt === "TEST" ? randInt(2, 5) : randInt(3, 5);
+    const host = Math.random() < 0.5 ? p.country : c.opponent;
+    const seriesStrength = randInt(45, 80);
+    p.intlFixtures = Array.from({ length: games }, () => ({
+      opponent: c.opponent, oppStrength: clamp(seriesStrength + randInt(-6, 6), 30, 95),
+      played: false, fmt, tag: c.name, ground: groundFor(host),
+    }));
+  }
+  p.intlIndex = 0;
+  save();
+}
+
+// group stage done — check qualification and, if you're through, add the semi-final fixture
+function progressAfterGroupStage() {
+  const p = state;
+  const sorted = p.tournamentTable.slice().sort((a, b) => b.pts - a.pts || (b.won - a.won));
+  const top4 = sorted.slice(0, 4).map(r => r.nation);
+  p.worldCupSemifinalists = top4;
+  if (!top4.includes(p.country)) {
+    p.worldCupStage = "GROUP_EXIT";
+    return finishInternationalWindow();
+  }
+  const others = top4.filter(n => n !== p.country);
+  const semiOpp = choice(others);
+  p.worldCupOtherSemiPair = others.filter(n => n !== semiOpp);
+  p.intlFixtures.push({
+    opponent: semiOpp, oppStrength: randInt(55, 85), played: false,
+    fmt: p.bigEvent.fmt, tag: `${p.bigEvent.name} — Semi-Final`, stage: "SEMI",
+    ground: groundFor(p.worldCupHost),
+  });
+  save();
+}
+
+// the other semi-final isn't played by you — resolve it on nation strength to find your final opponent
+function progressToFinal() {
+  const p = state;
+  const pair = p.worldCupOtherSemiPair || [];
+  let finalOpp;
+  if (pair.length === 2) {
+    const [a, b] = pair;
+    finalOpp = (NATION_STRENGTH[a] + rand(-10, 10)) > (NATION_STRENGTH[b] + rand(-10, 10)) ? a : b;
+  } else {
+    finalOpp = pair[0] || choice(OPPONENT_NATIONS_POOL.filter(n => n !== p.country));
+  }
+  p.intlFixtures.push({
+    opponent: finalOpp, oppStrength: randInt(60, 90), played: false,
+    fmt: p.bigEvent.fmt, tag: `${p.bigEvent.name} — Final`, stage: "FINAL",
+    ground: groundFor(p.worldCupHost),
+  });
+  save();
+}
+
+// dispatched whenever the current fixture list is exhausted — either the window is over,
+// or (for a World Cup group stage) the next knockout fixture needs to be added
+function advanceIntlWindow() {
+  const p = state;
+  if (p.bigEvent.active && p.bigEvent.kind === "GROUP") {
+    const lastFx = p.intlFixtures[p.intlFixtures.length - 1];
+    const stage = lastFx.stage || "GROUP";
+    if (stage === "GROUP") return progressAfterGroupStage();
+    if (stage === "SEMI") {
+      if (!lastFx.won) { p.worldCupStage = "SEMI_LOSS"; return finishInternationalWindow(); }
+      return progressToFinal();
+    }
+    if (stage === "FINAL") {
+      p.worldCupStage = lastFx.won ? "CHAMPION" : "FINAL_LOSS";
+      return finishInternationalWindow();
+    }
+  }
+  finishInternationalWindow();
 }
 
 function updateTournamentTable(opponentName, playerWon) {
@@ -957,8 +1066,8 @@ function playIntlMatch(precomputedPerf, precomputedTossNote) {
   p.intlIndex += 1;
   gainReputation(perf, won);
   awardMatchEarnings("intl", fx.fmt, perf, won);
-  updateTournamentTable(fx.opponent, won);
-  if (p.intlIndex >= p.intlFixtures.length) finishInternationalWindow();
+  if (!fx.stage || fx.stage === "GROUP") updateTournamentTable(fx.opponent, won);
+  if (p.intlIndex >= p.intlFixtures.length) advanceIntlWindow();
   save();
 }
 
@@ -974,11 +1083,11 @@ function simRestOfIntl() {
     p.formatCaps[fx.fmt] = (p.formatCaps[fx.fmt] || 0) + 1;
     gainReputation(perf, won);
     awardMatchEarnings("intl", fx.fmt, perf, won);
-    updateTournamentTable(fx.opponent, won);
+    if (!fx.stage || fx.stage === "GROUP") updateTournamentTable(fx.opponent, won);
     p.intlIndex += 1;
+    if (p.intlIndex >= p.intlFixtures.length) advanceIntlWindow();
   }
   p.lastMatchResult = null;
-  finishInternationalWindow();
   save();
 }
 
@@ -998,16 +1107,12 @@ function finishInternationalWindow() {
       finishTag = won1 ? "Champions" : "Runners-up";
       if (won1) trophy = { season: p.season, name: `${p.bigEvent.name} — Champions (${p.country})${captainNote}`, icon: "🏆" };
     } else {
-      // your final table position drives the outcome — the table isn't just decoration
-      const sorted = (p.tournamentTable || []).slice().sort((a, b) => b.pts - a.pts);
-      const rank = sorted.findIndex(r => r.nation === p.country) + 1 || sorted.length + 1;
-      const nationBoost = (nationStrength - 70) / 220;
-      if (rank === 1) finishTag = Math.random() < clamp(0.55 + nationBoost, 0.35, 0.8) ? "Champions" : "Runners-up";
-      else if (rank === 2) finishTag = Math.random() < clamp(0.4 + nationBoost, 0.2, 0.6) ? "Runners-up" : "Semi-finalists";
-      else if (rank <= 4) finishTag = Math.random() < 0.32 ? "Semi-finalists" : "Group stage exit";
+      // the group table decided qualification, and any semi-final/final were real matches you actually played —
+      // the finish tag just reports what already happened, no extra dice roll needed
+      if (p.worldCupStage === "CHAMPION") finishTag = "Champions";
+      else if (p.worldCupStage === "FINAL_LOSS") finishTag = "Runners-up";
+      else if (p.worldCupStage === "SEMI_LOSS") finishTag = "Semi-finalists";
       else finishTag = "Group stage exit";
-      // real cricket has upsets — a small flat chance of glory regardless of table position
-      if (finishTag !== "Champions" && Math.random() < 0.025) finishTag = "Champions";
       if (finishTag === "Champions") trophy = { season: p.season, name: `${p.bigEvent.name} — Champions (${p.country})${captainNote}`, icon: "🏆" };
     }
     if (trophy) {
@@ -1015,9 +1120,10 @@ function finishInternationalWindow() {
       p.earnings = (p.earnings || 0) + TROPHY_BONUS.major;
       p.seasonEarnings = (p.seasonEarnings || 0) + TROPHY_BONUS.major;
     }
-    p.lastIntlSummary = { stats: { ...s }, wins, bigEvent: true, eventName: p.bigEvent.name, finishTag, trophy, finalTable: p.tournamentTable };
+    p.lastIntlSummary = { stats: { ...s }, wins, bigEvent: true, eventName: p.bigEvent.name, finishTag, trophy, finalTable: p.tournamentTable, host: p.worldCupHost };
   } else {
-    p.lastIntlSummary = { stats: { ...s }, wins, bigEvent: false };
+    const firstFx = p.intlFixtures[0];
+    p.lastIntlSummary = { stats: { ...s }, wins, bigEvent: false, seriesName: p.intlCallup ? p.intlCallup.name : (firstFx ? firstFx.tag : null), opponent: firstFx ? firstFx.opponent : null };
   }
   const impact = s.runs + s.wickets * 22;
   if (impact > 180 && Math.random() < 0.45) {
@@ -1781,7 +1887,8 @@ function renderHubOverview() {
       <button class="secondary" onclick="App.simRestFranchise()">⏩ Sim rest of stint</button>
     `;
   } else if (p.selectedThisSeason && !p.intlDone) {
-    const tag = p.intlFixtures[0] ? p.intlFixtures[0].tag : "Series";
+    const curFx = p.intlFixtures[p.intlIndex];
+    const tag = curFx ? curFx.tag : "Series";
     phase = `Season ${p.season}/${MAX_SEASONS} · ${tag} ${p.intlIndex + 1}/${p.intlFixtures.length}`;
     actionButtons = `
       <button class="primary" onclick="App.goMatchSetup('intl')">✈️ Play next match</button>
@@ -2003,15 +2110,19 @@ function renderHubCareer() {
 function renderCallUp() {
   const p = state;
   applyCurrentTheme(p);
-  const tag = p.intlFixtures[0] ? p.intlFixtures[0].tag : "Series";
+  const c = p.intlCallup;
+  const fmtWord = FMT_SERIES_WORD[c.fmt] || "International";
   screen(`
     ${masthead()}
     <div class="big-event-screen">
       <div class="big-event-trophy">✈️</div>
       <div class="mode-tag">International call-up</div>
       <div class="big-event-title" style="font-size:32px;">${flagFor(p.country)} ${p.country}</div>
-      <p style="color:var(--text-dim);max-width:380px;">You've been picked for the national side — ${tag}. This is your shot on the big stage.</p>
-      <button class="primary" style="max-width:280px;" onclick="App.dismissIntlIntro()">Let's go</button>
+      <p style="color:var(--text-dim);max-width:380px;">You've been picked for the national side — the <strong style="color:var(--text);">${c.name}</strong> vs ${flagFor(c.opponent)} ${c.opponent} (${fmtWord}). This is your shot on the big stage.</p>
+      <div class="stack" style="max-width:320px;margin:0 auto;">
+        <button class="primary" onclick="App.acceptCallup()">Accept the call-up</button>
+        <button class="secondary" onclick="App.declineCallup()">Stay with your club this window</button>
+      </div>
     </div>
   `);
 }
@@ -2019,14 +2130,18 @@ function renderCallUp() {
 function renderBigEventIntro() {
   const p = state;
   applyCurrentTheme(p);
+  const c = p.intlCallup;
   screen(`
     ${masthead()}
     <div class="big-event-screen">
       <div class="big-event-trophy">🏆</div>
       <div class="mode-tag">You've been called up for</div>
-      <div class="big-event-title">${p.bigEvent.name}</div>
+      <div class="big-event-title">${c.name}</div>
       <p style="color:var(--text-dim);max-width:380px;">Representing ${flagFor(p.country)} ${p.country}. Every performance from here counts double.</p>
-      <button class="primary" style="max-width:280px;" onclick="App.dismissIntlIntro()">Take the field</button>
+      <div class="stack" style="max-width:320px;margin:0 auto;">
+        <button class="primary" onclick="App.acceptCallup()">Take the field</button>
+        <button class="secondary" onclick="App.declineCallup()">Withdraw from the squad</button>
+      </div>
     </div>
   `);
 }
@@ -2214,9 +2329,9 @@ function renderIntlSummary() {
   screen(`
     ${masthead()}
     <div class="hero" style="padding-top:6px;">
-      <div class="mode-tag">${sum.bigEvent ? sum.eventName : "International window"}</div>
+      <div class="mode-tag">${sum.bigEvent ? sum.eventName : (sum.seriesName || "International window")}</div>
       <h1>${flagFor(p.country)} ${p.country}</h1>
-      <p>${sum.wins} win${sum.wins === 1 ? "" : "s"} in this window${sum.bigEvent ? ` · ${sum.finishTag}` : ""}</p>
+      <p>${sum.bigEvent && sum.host ? `Hosted in ${flagFor(sum.host)} ${sum.host} · ` : sum.opponent ? `vs ${flagFor(sum.opponent)} ${sum.opponent} · ` : ""}${sum.wins} win${sum.wins === 1 ? "" : "s"} in this window${sum.bigEvent ? ` · ${sum.finishTag}` : ""}</p>
     </div>
     <div class="card">
       <div class="section-title">Your numbers</div>
@@ -2839,7 +2954,18 @@ const App = {
     if (p.bigEvent.active) renderBigEventIntro();
     else renderCallUp();
   },
-  dismissIntlIntro() { renderHub(); },
+  acceptCallup() {
+    buildIntlFixturesFromCallup();
+    renderHub();
+  },
+  declineCallup() {
+    const p = state;
+    p.intlDone = true;
+    p.intlCallup = null;
+    p.reputation = clamp(p.reputation - 5, 0, 100);
+    save();
+    renderSeasonSummary();
+  },
 
   continueFromMatch() {
     const p = state;
@@ -3001,6 +3127,7 @@ function freshPlayer(d) {
     seasonDomStats: emptyStatBlock(), seasonIntlStats: emptyStatBlock(), seasonFranchiseStats: emptyStatBlock(), seasonOverseasStats: emptyStatBlock(),
     selectedThisSeason: false,
     intlFixtures: [], intlIndex: 0,
+    intlCallup: null, worldCupHost: null, worldCupSemifinalists: null, worldCupOtherSemiPair: null, worldCupStage: null,
     franchiseFixtures: [], franchiseIndex: 0,
     domesticDone: false, intlDone: false, franchiseDone: false,
     overseasPending: false, overseasDone: true, overseasOffer: null, franchiseHistory: [],
