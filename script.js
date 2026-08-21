@@ -200,7 +200,11 @@ const WHEEL_SEGMENTS = [
   { key: "hot_streak", icon: "🔥", label: "Hot Streak", kind: "boost", color: "#e8935d" },
   { key: "bumper_deal", icon: "💰", label: "Bumper Deal", kind: "boost", color: "#f2c14e" },
   { key: "fan_favourite", icon: "🌟", label: "Fan Favourite", kind: "boost", color: "#5fd97a" },
-  { key: "niggle", icon: "🤕", label: "Niggling Injury", kind: "setback", color: "#e85d75" },
+  { key: "extra_yards", icon: "🏋️", label: "Extra Yards", kind: "boost", color: "#4fd1c5" },
+  { key: "media_circus", icon: "🎭", label: "Media Circus", kind: "mixed", color: "#b98af2" },
+  { key: "niggle", icon: "🤕", label: "Niggling Injury", kind: "setback", color: "#f2836b" },
+  { key: "lost_form", icon: "📉", label: "Lost Form", kind: "setback", color: "#e85d75" },
+  { key: "injury_scare", icon: "🦴", label: "Injury Scare", kind: "setback", color: "#c23b52" },
 ];
 
 const DB_KEY = "cricDynastyDB";
@@ -415,6 +419,15 @@ function perkValue(key) {
   const perk = PERKS.find(pk => pk.key === key);
   const lvl = perkLevel(key);
   return (perk && lvl > 0) ? perk.levels[lvl - 1].value : 0;
+}
+
+// true when there's at least one not-maxed perk (for this role) the player can currently afford
+function hasAffordablePerk(p) {
+  const bank = p.bankBalance || 0;
+  return perksForRole(p.role).some(perk => {
+    const lvl = perkLevel(perk.key);
+    return lvl < perk.levels.length && bank >= perk.levels[lvl].price;
+  });
 }
 
 function perkBatBonus(approach) {
@@ -795,6 +808,7 @@ function startSeason() {
   p.selectedThisSeason = false;
   p.intlFixtures = []; p.intlIndex = 0;
   p.intlCallup = null; p.worldCupHost = null; p.worldCupSemifinalists = null; p.worldCupOtherSemiPair = null; p.worldCupStage = null;
+  p.knockoutIntroShownFor = null;
   p.franchiseFixtures = []; p.franchiseIndex = 0;
   p.lastMatchResult = null; p.lastLeagueFinish = null; p.lastSeasonSummary = null;
   p.lastIntlSummary = null; p.lastFranchiseSummary = null; p.lastOverseasSummary = null;
@@ -1183,6 +1197,15 @@ function updateTournamentTable(opponentName, playerWon) {
   }
 }
 
+// a knockout match pays and matters more than any group game, win or lose — the occasion itself is the reward
+function applyKnockoutStakes(fx, won) {
+  if (fx.stage !== "SEMI" && fx.stage !== "FINAL") return;
+  const isFinal = fx.stage === "FINAL";
+  addEarnings(isFinal ? 80000 : 40000);
+  const p = state;
+  p.reputation = clamp(p.reputation + (isFinal ? 4 : 2) + (won ? (isFinal ? 4 : 2) : 0), 0, 100);
+}
+
 function playIntlMatch(precomputedPerf, precomputedTossNote) {
   const p = state;
   const fx = p.intlFixtures[p.intlIndex];
@@ -1194,10 +1217,11 @@ function playIntlMatch(precomputedPerf, precomputedTossNote) {
   addStat(p.seasonIntlStats, perf); addStat(p.stats.intl, perf);
   p.caps.intl += 1;
   p.formatCaps[fx.fmt] = (p.formatCaps[fx.fmt] || 0) + 1;
-  p.lastMatchResult = { kind: "intl", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tag: fx.tag, tossNote };
+  p.lastMatchResult = { kind: "intl", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tag: fx.tag, tossNote, stage: fx.stage || null };
   p.intlIndex += 1;
   gainReputation(perf, won);
   awardMatchEarnings("intl", fx.fmt, perf, won);
+  applyKnockoutStakes(fx, won);
   if (!fx.stage || fx.stage === "GROUP") updateTournamentTable(fx.opponent, won);
   if (p.intlIndex >= p.intlFixtures.length) advanceIntlWindow();
   save();
@@ -1215,6 +1239,7 @@ function simRestOfIntl() {
     p.formatCaps[fx.fmt] = (p.formatCaps[fx.fmt] || 0) + 1;
     gainReputation(perf, won);
     awardMatchEarnings("intl", fx.fmt, perf, won);
+    applyKnockoutStakes(fx, won);
     if (!fx.stage || fx.stage === "GROUP") updateTournamentTable(fx.opponent, won);
     p.intlIndex += 1;
     if (p.intlIndex >= p.intlFixtures.length) advanceIntlWindow();
@@ -1320,9 +1345,29 @@ function applyWheelEffect(segment) {
     case "fan_favourite":
       p.reputation = clamp(p.reputation + 8, 0, 100); p.teamStrength = clamp(p.teamStrength + 3, 1, 99);
       return "The fans are firmly behind you heading into the new season.";
+    case "extra_yards": {
+      if (p.role === "All-rounder") { p.bat = clamp(p.bat + 4, 1, 99); p.bowl = clamp(p.bowl + 4, 1, 99); }
+      else if (p.role === "Bowler") p.bowl = clamp(p.bowl + 6, 1, 99);
+      else p.bat = clamp(p.bat + 6, 1, 99);
+      return "Extra hours put in over the off-season pay off — your main skill sharpens noticeably.";
+    }
+    case "media_circus":
+      p.reputation = clamp(p.reputation + 12, 0, 100);
+      p.bat = clamp(p.bat - 3, 1, 99); p.bowl = clamp(p.bowl - 3, 1, 99);
+      return "Endless interviews and appearances raise your profile — but eat into your training time.";
     case "niggle":
       p.bat = clamp(p.bat - 3, 1, 99); p.bowl = clamp(p.bowl - 3, 1, 99);
       return "A niggling injury in the off-season blunts your sharpness a little.";
+    case "lost_form": {
+      if (p.role === "All-rounder") { p.bat = clamp(p.bat - 5, 1, 99); p.bowl = clamp(p.bowl - 5, 1, 99); }
+      else if (p.role === "Bowler") p.bowl = clamp(p.bowl - 8, 1, 99);
+      else p.bat = clamp(p.bat - 8, 1, 99);
+      return "You just can't find rhythm in the nets this off-season — a real dip in form.";
+    }
+    case "injury_scare":
+      p.bat = clamp(p.bat - 6, 1, 99); p.bowl = clamp(p.bowl - 6, 1, 99);
+      p.reputation = clamp(p.reputation - 5, 0, 100);
+      return "A scary injury setback wipes out weeks of preparation — a real blow heading into the new season.";
     default:
       return "";
   }
@@ -2081,7 +2126,7 @@ function renderHub() {
     <div class="hub-layout">
       <div class="hub-main">
         <div class="tab-bar">
-          ${tabs.map(t => `<div class="tab-btn ${p.hubTab === t ? "active" : ""}" onclick="App.setHubTab('${t}')">${t}</div>`).join("")}
+          ${tabs.map(t => `<div class="tab-btn ${p.hubTab === t ? "active" : ""}" onclick="App.setHubTab('${t}')">${t}${t === "Shop" && hasAffordablePerk(p) ? `<span class="tab-dot"></span>` : ""}</div>`).join("")}
         </div>
         ${mainBody}
       </div>
@@ -2432,6 +2477,26 @@ function renderBigEventIntro() {
   `);
 }
 
+function renderKnockoutIntro(fx) {
+  const p = state;
+  applyCurrentTheme(p);
+  const isFinal = fx.stage === "FINAL";
+  screen(`
+    ${masthead()}
+    <div class="big-event-screen">
+      <div class="big-event-trophy">${isFinal ? "🏆" : "🔥"}</div>
+      <div class="mode-tag">${p.bigEvent.name}</div>
+      <div class="big-event-title" style="font-size:${isFinal ? 36 : 30}px;">${isFinal ? "THE FINAL" : "SEMI-FINAL"}</div>
+      <p style="color:var(--text-dim);max-width:380px;">
+        ${isFinal
+          ? `This is it. Beat ${fx.opponent} today and ${flagFor(p.country)} ${p.country} are ${p.bigEvent.name} champions. Every run and every wicket from here is history.`
+          : `Beat ${fx.opponent} and you're one match away from lifting the ${p.bigEvent.name}. Lose, and the whole campaign ends today. Everything comes down to this.`}
+      </p>
+      <button class="primary" style="max-width:280px;" onclick="App.dismissKnockoutIntro()">Take the field</button>
+    </div>
+  `);
+}
+
 function renderDebut(fmt) {
   const p = state;
   applyCurrentTheme(p);
@@ -2494,6 +2559,10 @@ function renderMatchResult() {
         ${r.margin || (r.won ? "Won" : "Lost")}
       </div>
     </div>
+    ${r.stage === "FINAL" && p.worldCupStage === "CHAMPION" ? `<div class="milestone-banner" style="font-size:16px;">🏆🎉 CHAMPIONS! ${p.bigEvent.name} glory for ${p.country}!</div>` : ""}
+    ${r.stage === "FINAL" && p.worldCupStage === "FINAL_LOSS" ? `<div class="milestone-banner">😔 So close — runners-up in the ${p.bigEvent.name}.</div>` : ""}
+    ${r.stage === "SEMI" && p.worldCupStage !== "SEMI_LOSS" ? `<div class="milestone-banner" style="font-size:16px;">🔥 THROUGH TO THE FINAL!</div>` : ""}
+    ${r.stage === "SEMI" && p.worldCupStage === "SEMI_LOSS" ? `<div class="milestone-banner">The campaign ends here — semi-final exit.</div>` : ""}
     ${r.milestones.length ? `<div class="stack">${r.milestones.map(m => `<div class="milestone-banner">${m}</div>`).join("")}</div>` : ""}
     ${r.tossNote ? `<div class="empty-note">${r.tossNote}</div>` : ""}
     <button class="primary" onclick="App.continueFromMatch()">Continue</button>
@@ -2700,17 +2769,27 @@ function renderCaptaincyOffer(kind) {
 
 function renderWheel() {
   applyTheme(state.country);
+  const n = WHEEL_SEGMENTS.length;
+  const segAngle = 360 / n;
+  const gradientStops = WHEEL_SEGMENTS.map((s, i) => `${s.color} ${i * segAngle}deg ${(i + 1) * segAngle}deg`).join(", ");
+  const radius = 90;
   screen(`
     ${masthead()}
     <div class="hero" style="padding-top:6px;">
       <div class="mode-tag">Off-season</div>
       <h1>Spin for your off-season</h1>
-      <p>Three out of four land in your favour. Give it a spin.</p>
+      <p>4 boosts, a mixed blessing, and 3 real setbacks — one of them a genuine blow. Give it a spin.</p>
     </div>
     <div class="wheel-wrap">
       <div class="wheel-pointer">▼</div>
-      <div class="wheel" id="wheelEl">
-        ${WHEEL_SEGMENTS.map((s, i) => `<div class="wheel-seg wheel-seg-${i}"><span>${s.icon}</span></div>`).join("")}
+      <div class="wheel" id="wheelEl" style="background: conic-gradient(${gradientStops});">
+        ${WHEEL_SEGMENTS.map((s, i) => {
+          const center = i * segAngle + segAngle / 2;
+          const rad = (center * Math.PI) / 180;
+          const dx = radius * Math.sin(rad);
+          const dy = -radius * Math.cos(rad);
+          return `<span class="wheel-icon" style="left:calc(50% + ${dx.toFixed(1)}px - 15px); top:calc(50% + ${dy.toFixed(1)}px - 15px);">${s.icon}</span>`;
+        }).join("")}
       </div>
     </div>
     <div id="wheelResultBox"></div>
@@ -3057,6 +3136,15 @@ const App = {
 
   goMatchSetup(kind) {
     window.__matchSetupKind = kind;
+    if (kind === "intl") {
+      const p = state;
+      const fx = p.intlFixtures[p.intlIndex];
+      if (fx && (fx.stage === "SEMI" || fx.stage === "FINAL") && p.knockoutIntroShownFor !== p.intlIndex) {
+        p.knockoutIntroShownFor = p.intlIndex;
+        save();
+        return renderKnockoutIntro(fx);
+      }
+    }
     if (!window.__matchToss) {
       const pitch = choice(PITCH_TYPES);
       const wonToss = Math.random() < 0.5;
@@ -3064,6 +3152,7 @@ const App = {
     }
     renderMatchSetup(kind);
   },
+  dismissKnockoutIntro() { App.goMatchSetup("intl"); },
   setTossDecision(d) { window.__matchToss.decision = d; renderMatchSetup(window.__matchSetupKind); },
   confirmPlayMatch(kind) {
     const toss = window.__matchToss;
@@ -3358,11 +3447,12 @@ const App = {
     const wheelEl = document.getElementById("wheelEl");
     if (!btn || !wheelEl || btn.disabled) return;
     btn.disabled = true;
-    const idx = randInt(0, WHEEL_SEGMENTS.length - 1);
+    const n = WHEEL_SEGMENTS.length;
+    const segAngle = 360 / n;
+    const idx = randInt(0, n - 1);
     const segment = WHEEL_SEGMENTS[idx];
-    // segment center angles, clockwise from 12 o'clock: seg0(NW)=315, seg1(NE)=45, seg2(SE)=135, seg3(SW)=225
-    const segmentTopAngle = [315, 45, 135, 225];
-    const finalAngle = 360 * 5 + ((360 - segmentTopAngle[idx]) % 360);
+    const centerAngle = idx * segAngle + segAngle / 2;
+    const finalAngle = 360 * 5 + ((360 - centerAngle) % 360);
     wheelEl.style.transform = `rotate(${finalAngle}deg)`;
     setTimeout(() => {
       const message = applyWheelEffect(segment);
@@ -3447,6 +3537,7 @@ function freshPlayer(d) {
     selectedThisSeason: false,
     intlFixtures: [], intlIndex: 0,
     intlCallup: null, worldCupHost: null, worldCupSemifinalists: null, worldCupOtherSemiPair: null, worldCupStage: null,
+    knockoutIntroShownFor: null,
     franchiseFixtures: [], franchiseIndex: 0,
     domesticDone: false, intlDone: false, franchiseDone: false,
     overseasPending: false, overseasDone: true, overseasOffer: null, franchiseHistory: [],

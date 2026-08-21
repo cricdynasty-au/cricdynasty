@@ -275,6 +275,7 @@ button.link-btn:hover { border-color: var(--accent); color: var(--accent); backg
   padding: 4px;
 }
 .tab-btn {
+  position: relative;
   flex: 1;
   text-align: center;
   padding: 9px 4px;
@@ -285,6 +286,17 @@ button.link-btn:hover { border-color: var(--accent); color: var(--accent); backg
   cursor: pointer;
 }
 .tab-btn.active { background: var(--accent); color: var(--accent-text); }
+.tab-dot {
+  display: inline-block;
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-3);
+  box-shadow: 0 0 0 2px var(--card);
+}
 
 /* ---- hub layout: main content + sidebar (fixtures/rankings) ---- */
 .hub-layout {
@@ -507,21 +519,14 @@ button.link-btn:hover { border-color: var(--accent); color: var(--accent); backg
   transition: transform 3.1s cubic-bezier(.17,.89,.32,1.1);
   overflow: hidden;
 }
-.wheel-seg {
+.wheel-icon {
   position: absolute;
-  width: 50%;
-  height: 50%;
-  font-size: 26px;
+  width: 30px;
+  height: 30px;
+  font-size: 20px;
+  text-align: center;
+  line-height: 30px;
 }
-.wheel-seg span { position: absolute; }
-.wheel-seg-0 { top: 0; left: 0; background: #e8935d; }
-.wheel-seg-0 span { top: 26px; left: 26px; }
-.wheel-seg-1 { top: 0; left: 50%; background: #f2c14e; }
-.wheel-seg-1 span { top: 26px; right: 26px; }
-.wheel-seg-2 { top: 50%; left: 50%; background: #5fd97a; }
-.wheel-seg-2 span { bottom: 26px; right: 26px; }
-.wheel-seg-3 { top: 50%; left: 0; background: #e85d75; }
-.wheel-seg-3 span { bottom: 26px; left: 26px; }
 
 .toast {
   position: fixed;
