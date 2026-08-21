@@ -2196,15 +2196,16 @@ function renderHubShop() {
             const isOwned = !!owned[perk.key];
             const canAfford = (p.bankBalance || 0) >= perk.price;
             return `
-              <div class="format-card" title="${perk.desc}" style="cursor:default;${isOwned ? "opacity:0.7;" : ""}">
-                <div class="format-icon">${perk.icon}</div>
-                <div style="flex:1;">
-                  <div class="format-title">${perk.name}</div>
-                  <div class="format-desc">${perk.desc}</div>
+              <div class="perk-item ${isOwned ? "owned" : ""}" title="${perk.desc}">
+                <div class="perk-head">
+                  <span class="perk-icon">${perk.icon}</span>
+                  <div class="perk-name">${perk.name}</div>
+                  ${isOwned
+                    ? `<span class="perk-owned-tag">✅ Owned</span>`
+                    : `<span class="perk-price">${formatMoney(perk.price)}</span>`}
                 </div>
-                ${isOwned
-                  ? `<span class="badge" style="flex-shrink:0;">✅ Owned</span>`
-                  : `<button class="secondary" style="flex-shrink:0;" ${canAfford ? "" : "disabled"} onclick="App.buyPerk('${perk.key}')">💰 ${formatMoney(perk.price)}</button>`}
+                <div class="perk-desc">${perk.desc}</div>
+                ${isOwned ? "" : `<button class="secondary perk-buy-btn" ${canAfford ? "" : "disabled"} onclick="App.buyPerk('${perk.key}')">Buy</button>`}
               </div>
             `;
           }).join("")}

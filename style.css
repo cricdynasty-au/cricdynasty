@@ -405,6 +405,16 @@ button.link-btn:hover { border-color: var(--accent); color: var(--accent); backg
 
 .empty-note { color: var(--text-dim); font-size: 13.5px; text-align: center; padding: 14px 0; }
 
+.perk-item { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; background: var(--card-2); }
+.perk-item.owned { opacity: 0.6; }
+.perk-head { display: flex; align-items: center; gap: 10px; }
+.perk-icon { font-size: 22px; flex-shrink: 0; line-height: 1; }
+.perk-name { font-family: var(--font-display); font-size: 15.5px; font-weight: 700; flex: 1; min-width: 0; }
+.perk-price { flex-shrink: 0; font-size: 13px; font-weight: 700; color: var(--accent-2); white-space: nowrap; }
+.perk-owned-tag { flex-shrink: 0; font-size: 12px; font-weight: 700; color: var(--text-dim); white-space: nowrap; }
+.perk-desc { font-size: 12.5px; color: var(--text-dim); line-height: 1.45; margin-top: 8px; }
+.perk-buy-btn { width: 100%; margin-top: 10px; }
+
 .legacy-tier { text-align: center; padding: 6px 0 2px; }
 .legacy-tier .tier-name { font-family: var(--font-display); font-size: 30px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--accent-2); }
 .legacy-tier .tier-sub { color: var(--text-dim); font-size: 13px; margin-top: 4px; }
