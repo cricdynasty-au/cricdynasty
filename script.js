@@ -235,10 +235,31 @@ function applyTournamentTheme(eventName) {
   document.body.classList.add("tournament-mode");
 }
 
+// the nation you're currently facing in an international window — only nations carry a theme,
+// so domestic/franchise opponents (no colour data) just fall through to your own board colour
+function currentOpponentCountry(p) {
+  if (!p || !p.selectedThisSeason || p.intlDone) return null;
+  const fx = p.intlFixtures[p.intlIndex];
+  if (fx && THEMES[fx.opponent]) return fx.opponent;
+  return null;
+}
+
+function applyMatchupTheme(myCountry, oppCountry) {
+  const mine = THEMES[myCountry] || THEMES.default;
+  const theirs = THEMES[oppCountry] || THEMES.default;
+  const root = document.documentElement;
+  root.style.setProperty("--accent", mine.accent);
+  root.style.setProperty("--accent-2", theirs.accent);
+  root.style.setProperty("--accent-text", mine.text);
+  document.body.classList.remove("tournament-mode");
+}
+
 // call at the top of any hub-family render so the tournament palette holds for the whole window, then reverts
 function applyCurrentTheme(p) {
-  if (p && p.bigEvent && p.bigEvent.active && p.selectedThisSeason && !p.intlDone) applyTournamentTheme(p.bigEvent.name);
-  else applyTheme(p ? p.country : "default");
+  if (p && p.bigEvent && p.bigEvent.active && p.selectedThisSeason && !p.intlDone) return applyTournamentTheme(p.bigEvent.name);
+  const opp = currentOpponentCountry(p);
+  if (opp) return applyMatchupTheme(p.country, opp);
+  applyTheme(p ? p.country : "default");
 }
 
 function emptyStatBlock() {
