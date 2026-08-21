@@ -1657,19 +1657,38 @@ function renderSaveList() {
       <p>Pick up a career in progress, or start a brand new one.</p>
     </div>
     <div class="stack">
-      ${saves.map(s => `
+      ${saves.map(s => {
+        const outdated = s.version !== SAVE_VERSION;
+        return `
         <div class="format-card" onclick="App.openSave('${s.id}')">
           <div class="format-icon">${flagFor(s.country)}</div>
           <div style="flex:1;">
-            <div class="format-title">${s.name} · Season ${s.season}/${MAX_SEASONS}${s.retired ? " · Retired" : ""}</div>
-            <div class="format-desc">Currently playing for ${s.team}${s.franchiseTeam && s.format === "ALL_ROUND" ? ` / ${s.franchiseTeam}` : ""}</div>
+            <div class="format-title">${s.name} · Season ${s.season}/${MAX_SEASONS}${s.retired ? " · Retired" : ""}${outdated ? ` <span class="badge" style="color:var(--accent-3);">Outdated</span>` : ""}</div>
+            <div class="format-desc">${outdated ? "Saved with an older version of the game — tap to see options." : `Currently playing for ${s.team}${s.franchiseTeam && s.format === "ALL_ROUND" ? ` / ${s.franchiseTeam}` : ""}`}</div>
           </div>
           <button class="link-btn" onclick="event.stopPropagation(); App.deleteSaveConfirm('${s.id}')" style="color:var(--accent-3);">Delete</button>
         </div>
-      `).join("")}
+      `;
+      }).join("")}
     </div>
     <button class="primary" onclick="App.goFormatSelect()">+ Start New Dynasty</button>
     ${helpLinksRow()}
+  `);
+}
+
+function renderSaveIncompatible(rec) {
+  applyTheme("default");
+  screen(`
+    ${masthead(`<button class="link-btn" onclick="App.goSaveList()">‹ Back</button>`)}
+    <div class="hero" style="padding-top:8px;">
+      <div class="mode-tag">Save incompatible</div>
+      <h1>${rec.name}'s dynasty can't continue</h1>
+      <p>This career was saved with an older version of CricDynasty (v${rec.version}, this build needs v${SAVE_VERSION}). Recent updates changed how careers are stored under the hood — new fields this save doesn't have — so it can't be safely resumed. Sorry about that; you'll need to start a fresh dynasty to keep playing.</p>
+    </div>
+    <div class="stack">
+      <button class="secondary" onclick="App.deleteSaveConfirm('${rec.id}')">Delete this save</button>
+      <button class="primary" onclick="App.goSaveList()">‹ Back to dynasties</button>
+    </div>
   `);
 }
 
@@ -2946,7 +2965,8 @@ const App = {
   goFaq() { renderFaq(); },
   openSave(id) {
     const rec = savesForUser(currentUser).find(s => s.id === id);
-    if (!rec || rec.version !== SAVE_VERSION) return;
+    if (!rec) return renderSaveList();
+    if (rec.version !== SAVE_VERSION) return renderSaveIncompatible(rec);
     state = rec; currentSaveId = id;
     if (state.retired) renderRetirement();
     else if (state.lastMatchResult) renderMatchResult();
