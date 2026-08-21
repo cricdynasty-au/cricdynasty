@@ -2800,7 +2800,7 @@ function renderWheel() {
 function renderOffSeason() {
   const p = state;
   applyTheme(p.country);
-  const willForceRetire = p.age >= RETIRE_AGE_HARD;
+  const willForceRetire = p.age >= RETIRE_AGE_HARD || p.season >= MAX_SEASONS;
   screen(`
     ${masthead()}
     <div class="hero" style="padding-top:6px;">
@@ -3478,8 +3478,9 @@ const App = {
   retireNow() { retirePlayer(); renderRetirement(); },
   goNextSeason() {
     const p = state;
-    if (p.age >= RETIRE_AGE_HARD) { retirePlayer(); renderRetirement(); return; }
+    if (p.age >= RETIRE_AGE_HARD || p.season >= MAX_SEASONS) { retirePlayer(); renderRetirement(); return; }
     advanceToNextSeason();
+    if (state.retired) return renderRetirement();
     renderHub();
   },
 
