@@ -130,7 +130,8 @@ const SPONSOR_PERKS = [
 ];
 
 function sponsorTierFor(p) {
-  const eliteRank = (p.rankBat != null && p.rankBowl != null) ? Math.min(p.rankBat, p.rankBowl) : 999;
+  const ranks = [p.rankBat, p.rankBowl].filter(r => r != null);
+  const eliteRank = ranks.length ? Math.min(...ranks) : 999;
   const proven = p.trophies.length > 0 || p.awards.length > 0;
   if (p.reputation >= 78 && eliteRank <= 10 && proven) return 3;
   if (p.reputation >= 40 || (p.caps.domestic + p.caps.intl + p.caps.franchise) >= 20) return 2;
@@ -147,9 +148,13 @@ function formatMoney(n) {
   return `$${n}`;
 }
 
-function contractSalaryFor(kind, mod, reputation) {
+function formatPercent(n) { return `${Math.round(n * 100)}%`; }
+
+// prestige only pays off once you're a proven quantity — an unproven rookie gets the same standard
+// deal everywhere, regardless of which club they sign for
+function contractSalaryFor(kind, mod, reputation, applyPrestige) {
   const base = kind === "FRANCHISE" ? 35000 : 15000;
-  const prestigeMult = 1 + (mod / 10) * 0.4;
+  const prestigeMult = applyPrestige ? 1 + (mod / 10) * 0.4 : 1;
   const repMult = 1 + (reputation != null ? reputation : 20) / 130;
   return Math.round((base * prestigeMult * repMult) / 500) * 500;
 }
@@ -200,7 +205,7 @@ const WHEEL_SEGMENTS = [
 
 const DB_KEY = "cricDynastyDB";
 const LAST_USER_KEY = "cricDynastyLastUser";
-const SAVE_VERSION = 8;
+const SAVE_VERSION = 10;
 
 const MAX_SEASONS = 20;
 const MATCHES_PER_SEASON = 10;
@@ -341,12 +346,13 @@ const FORMAT_SCALE = {
 
 // mean-runs model per format: mean = base + rating*slope, drawn from an exponential distribution
 // (naturally gives realistic long tails: lots of low scores, occasional big ones, average ≈ mean)
+// steep on purpose — a middling rating should rarely produce a big score, an elite one regularly should
 const BATTING_MEAN = {
-  TEST: { base: 8, slope: 0.42, sr: 48 },
-  FC: { base: 7, slope: 0.4, sr: 52 },
-  ODI: { base: 7, slope: 0.36, sr: 88 },
-  T20: { base: 5, slope: 0.28, sr: 128 },
-  FRANCHISE: { base: 5, slope: 0.28, sr: 128 },
+  TEST: { base: -16, slope: 0.71, sr: 48 },
+  FC: { base: -17, slope: 0.68, sr: 52 },
+  ODI: { base: -17, slope: 0.61, sr: 88 },
+  T20: { base: -19, slope: 0.47, sr: 128 },
+  FRANCHISE: { base: -19, slope: 0.47, sr: 128 },
 };
 
 /* ================= simulation ================= */
@@ -363,24 +369,33 @@ const BOWLING_APPROACHES = {
 };
 
 /* ================= perk shop ================= */
-// bought with money instead of grinding reputation — flat rating bonuses (some approach-gated) plus two reputation-flow perks
+// bought with money instead of grinding reputation — each perk has 3 levels, starting cheap/small and
+// growing into a bigger, pricier bonus. A pure batter/bowler only ever sees perks for the skill they use.
 const PERKS = [
-  { key: "concreteBlocker", icon: "🧱", name: "Concrete Blocker", category: "BAT", price: 60000,
-    desc: "+4 effective batting rating whenever you play Cautious — technique holds up under sustained pressure." },
-  { key: "sixMachine", icon: "💥", name: "Six Machine", category: "BAT", price: 70000,
-    desc: "+4 effective batting rating whenever you play Aggressive — loads up for the boundary without losing shape." },
-  { key: "bigMatchPlayer", icon: "🎯", name: "Big Match Player", category: "BAT", price: 110000,
-    desc: "+3 effective batting rating in every approach — a general step up in composure when the stakes are highest." },
-  { key: "lockdown", icon: "🔒", name: "Lockdown", category: "BOWL", price: 60000,
-    desc: "+4 effective bowling rating whenever you play Contain — relentless discipline, barely a bad ball in the over." },
-  { key: "wicketHunter", icon: "🏹", name: "Wicket Hunter", category: "BOWL", price: 70000,
-    desc: "+4 effective bowling rating whenever you play Attack — always searching for the breakthrough." },
-  { key: "iceNerve", icon: "❄️", name: "Ice Nerve", category: "BOWL", price: 110000,
-    desc: "+3 effective bowling rating in every approach — never rattled, whatever the moment." },
-  { key: "mediaSavvy", icon: "📣", name: "Media Savvy", category: "MENTAL", price: 130000,
-    desc: "+20% reputation gained from every good performance — you know how to work a headline." },
-  { key: "ironResolve", icon: "🛡️", name: "Iron Resolve", category: "MENTAL", price: 130000,
-    desc: "Halves the reputation you lose from bad days and defeats — setbacks barely register." },
+  { key: "concreteBlocker", icon: "🧱", name: "Concrete Blocker", category: "BAT",
+    desc: "Extra effective batting rating whenever you play Cautious — technique holds up under sustained pressure.",
+    levels: [{ price: 30000, value: 2 }, { price: 70000, value: 4 }, { price: 130000, value: 6 }] },
+  { key: "sixMachine", icon: "💥", name: "Six Machine", category: "BAT",
+    desc: "Extra effective batting rating whenever you play Aggressive — loads up for the boundary without losing shape.",
+    levels: [{ price: 35000, value: 2 }, { price: 80000, value: 4 }, { price: 150000, value: 6 }] },
+  { key: "bigMatchPlayer", icon: "🎯", name: "Big Match Player", category: "BAT",
+    desc: "Extra effective batting rating in every approach — a general step up in composure when the stakes are highest.",
+    levels: [{ price: 50000, value: 1 }, { price: 100000, value: 2 }, { price: 180000, value: 3 }] },
+  { key: "lockdown", icon: "🔒", name: "Lockdown", category: "BOWL",
+    desc: "Extra effective bowling rating whenever you play Contain — relentless discipline, barely a bad ball in the over.",
+    levels: [{ price: 30000, value: 2 }, { price: 70000, value: 4 }, { price: 130000, value: 6 }] },
+  { key: "wicketHunter", icon: "🏹", name: "Wicket Hunter", category: "BOWL",
+    desc: "Extra effective bowling rating whenever you play Attack — always searching for the breakthrough.",
+    levels: [{ price: 35000, value: 2 }, { price: 80000, value: 4 }, { price: 150000, value: 6 }] },
+  { key: "iceNerve", icon: "❄️", name: "Ice Nerve", category: "BOWL",
+    desc: "Extra effective bowling rating in every approach — never rattled, whatever the moment.",
+    levels: [{ price: 50000, value: 1 }, { price: 100000, value: 2 }, { price: 180000, value: 3 }] },
+  { key: "mediaSavvy", icon: "📣", name: "Media Savvy", category: "MENTAL",
+    desc: "Extra reputation gained from every good performance — you know how to work a headline.",
+    levels: [{ price: 60000, value: 0.1 }, { price: 130000, value: 0.2 }, { price: 220000, value: 0.3 }] },
+  { key: "ironResolve", icon: "🛡️", name: "Iron Resolve", category: "MENTAL",
+    desc: "Less reputation lost from bad days and defeats — setbacks register less and less.",
+    levels: [{ price: 60000, value: 0.25 }, { price: 130000, value: 0.5 }, { price: 220000, value: 0.75 }] },
 ];
 const PERK_CATEGORIES = [
   { key: "BAT", label: "Batting" },
@@ -388,22 +403,30 @@ const PERK_CATEGORIES = [
   { key: "MENTAL", label: "Mental edge" },
 ];
 
-function hasPerk(key) { return !!(state && state.perks && state.perks[key]); }
+// a pure batter never sees bowling perks (and vice versa) — only an all-rounder practises both
+function perksForRole(role) {
+  if (role === "Bowler") return PERKS.filter(pk => pk.category !== "BAT");
+  if (role === "Batsman" || role === "Wicketkeeper-Batsman") return PERKS.filter(pk => pk.category !== "BOWL");
+  return PERKS;
+}
+
+function perkLevel(key) { return (state && state.perks && state.perks[key]) || 0; }
+function perkValue(key) {
+  const perk = PERKS.find(pk => pk.key === key);
+  const lvl = perkLevel(key);
+  return (perk && lvl > 0) ? perk.levels[lvl - 1].value : 0;
+}
 
 function perkBatBonus(approach) {
-  if (!state || !state.perks) return 0;
-  let bonus = 0;
-  if (state.perks.concreteBlocker && approach === "Cautious") bonus += 4;
-  if (state.perks.sixMachine && approach === "Aggressive") bonus += 4;
-  if (state.perks.bigMatchPlayer) bonus += 3;
+  let bonus = perkValue("bigMatchPlayer");
+  if (approach === "Cautious") bonus += perkValue("concreteBlocker");
+  if (approach === "Aggressive") bonus += perkValue("sixMachine");
   return bonus;
 }
 function perkBowlBonus(approach) {
-  if (!state || !state.perks) return 0;
-  let bonus = 0;
-  if (state.perks.lockdown && approach === "Contain") bonus += 4;
-  if (state.perks.wicketHunter && approach === "Attack") bonus += 4;
-  if (state.perks.iceNerve) bonus += 3;
+  let bonus = perkValue("iceNerve");
+  if (approach === "Contain") bonus += perkValue("lockdown");
+  if (approach === "Attack") bonus += perkValue("wicketHunter");
   return bonus;
 }
 
@@ -415,9 +438,11 @@ function simulateBattingInnings(rating, oppStrength, fmt, approach) {
   const form = randInt(-8, 8);
   const effective = clamp(rating + form - (oppStrength - 50) / 4, 1, 99);
   const mean = clamp((cfg.base + effective * cfg.slope) * app.meanMult, 3, 85);
-  const runs = clamp(Math.round(-Math.log(Math.random()) * mean), 0, Math.round(mean * 3.4));
+  // the cap just stops truly absurd outliers — with means this low it must stay generous or big scores become impossible outright
+  const runs = clamp(Math.round(-Math.log(Math.random()) * mean), 0, Math.round(mean * 6));
   const outBase = longFmt ? 0.84 : fmt === "ODI" ? 0.77 : 0.8;
-  const outChance = clamp(outBase - effective / 900 + app.outAdj, 0.35, 0.95);
+  // skill matters a lot here — a weak batter is dismissed far more often than a genuinely good one
+  const outChance = clamp(outBase - effective / 150 + app.outAdj, 0.08, 0.95);
   const out = Math.random() < outChance;
   const sr = cfg.sr * app.srMult * rand(0.78, 1.22);
   const balls = Math.max(1, Math.round((runs / sr) * 100));
@@ -483,23 +508,25 @@ function simulateBattingPhase(effRating, oppStrength, fmt, approach) {
   const form = randInt(-8, 8);
   const effective = clamp(effRating + form - (oppStrength - 50) / 4, 1, 99);
   const outBase = longFmt ? 0.84 : fmt === "ODI" ? 0.77 : 0.8;
-  const perPhaseOut = clamp((outBase - effective / 900 + app.outAdj) * 0.68, 0.08, 0.72);
+  // same skill sensitivity as the bulk model — a weak batter rarely survives a full innings
+  const perPhaseOut = clamp((outBase - effective / 150 + app.outAdj) * 0.68, 0.05, 0.75);
   const out = Math.random() < perPhaseOut;
 
   // every phase — session or powerplay/middle/death alike — means real time at the crease.
   // balls faced comes first (how long that phase actually lasts for you), runs follow from strike rate.
+  // steep on purpose, same as the bulk model — a weak batter should visibly struggle to score, not just get out more
   let balls, srFloor, srSlope, srCap, fourShare, sixShare;
   if (longFmt) {
     balls = randInt(35, 85);
-    srFloor = 28; srSlope = 0.35; srCap = 75; fourShare = [0.1, 0.22]; sixShare = [0, 0.04];
+    srFloor = 8; srSlope = 0.44; srCap = 78; fourShare = [0.1, 0.22]; sixShare = [0, 0.04];
   } else if (fmt === "ODI") {
     balls = randInt(15, 35);
-    srFloor = 45; srSlope = 0.55; srCap = 130; fourShare = [0.12, 0.26]; sixShare = [0.01, 0.06];
+    srFloor = 12; srSlope = 0.95; srCap = 140; fourShare = [0.12, 0.26]; sixShare = [0.01, 0.06];
   } else {
     balls = randInt(9, 22);
-    srFloor = 55; srSlope = 0.85; srCap = 195; fourShare = [0.14, 0.3]; sixShare = [0.02, 0.1];
+    srFloor = 13; srSlope = 1.3; srCap = 205; fourShare = [0.14, 0.3]; sixShare = [0.02, 0.1];
   }
-  const baseSR = clamp(srFloor + effective * srSlope, 35, srCap) * app.srMult;
+  const baseSR = clamp(srFloor + effective * srSlope, 15, srCap) * app.srMult;
   const sr = baseSR * rand(0.75, 1.25);
   const runs = Math.max(0, Math.round((balls * sr) / 100));
   const fours = clamp(Math.round((runs * rand(fourShare[0], fourShare[1])) / 4), 0, 12);
@@ -764,6 +791,7 @@ function startSeason() {
   addEarnings(salaryThisSeason);
   p.domesticDone = false; p.intlDone = false; p.franchiseDone = p.format !== "ALL_ROUND";
   p.overseasPending = false; p.overseasDone = true; p.overseasOffer = null;
+  p.overseasFixtures = []; p.overseasIndex = 0;
   p.selectedThisSeason = false;
   p.intlFixtures = []; p.intlIndex = 0;
   p.intlCallup = null; p.worldCupHost = null; p.worldCupSemifinalists = null; p.worldCupOtherSemiPair = null; p.worldCupStage = null;
@@ -875,24 +903,58 @@ function setupOverseasPhase() {
   }
 }
 
-function playOverseasStint() {
+function startOverseasStint() {
   const p = state;
   const offer = p.overseasOffer;
   addEarnings(offer.fee);
   const pool = T20_FRANCHISES[offer.country].filter(t => t !== offer.team);
-  const fixtures = pickN(pool, Math.min(4, pool.length)).map(opp => ({ opponent: opp, oppStrength: randInt(45, 78), fmt: "FRANCHISE", ground: groundFor(offer.country) }));
-  fixtures.forEach(fx => {
+  p.overseasFixtures = pickN(pool, Math.min(4, pool.length)).map(opp => ({ opponent: opp, oppStrength: randInt(45, 78), played: false, fmt: "FRANCHISE", ground: groundFor(offer.country) }));
+  p.overseasIndex = 0;
+  p.overseasPending = false;
+}
+
+function playOverseasMatch(precomputedPerf, precomputedTossNote) {
+  const p = state;
+  const fx = p.overseasFixtures[p.overseasIndex];
+  const tossNote = precomputedPerf ? precomputedTossNote : tossNoteFor(window.__matchToss);
+  const perf = precomputedPerf || simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
+  if (!precomputedPerf) window.__matchToss = null;
+  const won = Math.random() < teamWinProbability(domesticTeamStrength(p) + 2, fx.oppStrength, perf);
+  fx.played = true; fx.won = won;
+  addStat(p.seasonOverseasStats, perf); addStat(p.stats.overseas, perf);
+  p.caps.overseas = (p.caps.overseas || 0) + 1;
+  p.lastMatchResult = { kind: "overseas", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tossNote, tag: p.overseasOffer.league };
+  p.overseasIndex += 1;
+  gainReputation(perf, won);
+  awardMatchEarnings("overseas", fx.fmt, perf, won);
+  if (p.overseasIndex >= p.overseasFixtures.length) finishOverseasStint();
+  save();
+}
+
+function simRestOfOverseas() {
+  const p = state;
+  while (p.overseasIndex < p.overseasFixtures.length) {
+    const fx = p.overseasFixtures[p.overseasIndex];
     const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
     const won = Math.random() < teamWinProbability(domesticTeamStrength(p) + 2, fx.oppStrength, perf);
+    fx.played = true; fx.won = won;
     addStat(p.seasonOverseasStats, perf); addStat(p.stats.overseas, perf);
     p.caps.overseas = (p.caps.overseas || 0) + 1;
     gainReputation(perf, won);
     awardMatchEarnings("overseas", fx.fmt, perf, won);
-  });
+    p.overseasIndex += 1;
+  }
+  p.lastMatchResult = null;
+  finishOverseasStint();
+  save();
+}
+
+function finishOverseasStint() {
+  const p = state;
+  const offer = p.overseasOffer;
   p.overseasDone = true;
   p.lastOverseasSummary = { stats: { ...p.seasonOverseasStats }, team: offer.team, league: offer.league, country: offer.country };
   p.franchiseHistory.push({ season: p.season, team: offer.team, country: offer.country, league: offer.league });
-  save();
   decideInternationalSelection();
 }
 
@@ -904,7 +966,8 @@ function proceedAfterOverseas() {
 function startFranchiseStint() {
   const p = state;
   const pool = teamPoolFor(p.country, "FRANCHISE");
-  p.franchiseFixtures = pickN(pool.filter(t => t !== p.franchiseTeam), 4).map(opp => ({ opponent: opp, oppStrength: randInt(40, 72), played: false, fmt: "FRANCHISE", ground: groundFor(p.country) }));
+  const games = franchiseMatchCountFor(p);
+  p.franchiseFixtures = pickN(pool.filter(t => t !== p.franchiseTeam), games).map(opp => ({ opponent: opp, oppStrength: randInt(40, 72), played: false, fmt: "FRANCHISE", ground: groundFor(p.country) }));
   p.franchiseIndex = 0;
   p.franchiseDone = false;
 }
@@ -915,7 +978,7 @@ function playFranchiseMatch(precomputedPerf, precomputedTossNote) {
   const tossNote = precomputedPerf ? precomputedTossNote : tossNoteFor(window.__matchToss);
   const perf = precomputedPerf || simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
   if (!precomputedPerf) window.__matchToss = null;
-  const won = Math.random() < teamWinProbability(domesticTeamStrength(p) + 4, fx.oppStrength, perf);
+  const won = Math.random() < teamWinProbability(franchiseTeamStrength(p) + 4, fx.oppStrength, perf);
   fx.played = true; fx.won = won;
   addStat(p.seasonFranchiseStats, perf); addStat(p.stats.franchise, perf);
   p.caps.franchise += 1;
@@ -932,7 +995,7 @@ function simRestOfFranchise() {
   while (p.franchiseIndex < p.franchiseFixtures.length) {
     const fx = p.franchiseFixtures[p.franchiseIndex];
     const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
-    const won = Math.random() < teamWinProbability(domesticTeamStrength(p) + 4, fx.oppStrength, perf);
+    const won = Math.random() < teamWinProbability(franchiseTeamStrength(p) + 4, fx.oppStrength, perf);
     fx.played = true; fx.won = won;
     addStat(p.seasonFranchiseStats, perf); addStat(p.stats.franchise, perf);
     p.caps.franchise += 1;
@@ -1212,8 +1275,8 @@ function gainReputation(perf, won) {
   innScores.forEach(r => { if (r >= 100) delta += 4; else if (r >= 50) delta += 1.5; });
   if (perf.bowled && perf.wickets >= 5) delta += 4;
   else if (perf.bowled && perf.wickets >= 3) delta += 1.2;
-  if (delta > 0 && hasPerk("mediaSavvy")) delta *= 1.2;
-  if (delta < 0 && hasPerk("ironResolve")) delta *= 0.5;
+  if (delta > 0) delta *= 1 + perkValue("mediaSavvy");
+  if (delta < 0) delta *= 1 - perkValue("ironResolve");
   p.reputation = clamp(p.reputation + delta, 0, 100);
 }
 
@@ -1271,13 +1334,21 @@ function ageAndProgress() {
   const p = state;
   const growthAge = 27, declineAge = 32;
   const before = { bat: p.bat, bowl: p.bowl };
+  // a skill you don't actually practise doesn't mature just from getting older —
+  // only the discipline(s) your role calls for grow with age; an unpractised skill can only rust
+  const practises = {
+    bat: p.role !== "Bowler",
+    bowl: p.role === "Bowler" || p.role === "All-rounder",
+  };
   ["bat", "bowl"].forEach(k => {
     if (p[k] <= 3) return;
     if (p.age < growthAge) {
-      const gap = p.potential - p[k];
-      p[k] += Math.max(0, Math.round(gap * rand(0.06, 0.2)));
+      if (practises[k]) {
+        const gap = p.potential - p[k];
+        p[k] += Math.max(0, Math.round(gap * rand(0.06, 0.2)));
+      }
     } else if (p.age <= declineAge) {
-      p[k] += randInt(-1, 2);
+      if (practises[k]) p[k] += randInt(-1, 2);
     } else {
       const noDeclineChance = p.age > 36 ? 0.25 : 0.4;
       const dec = Math.random() < noDeclineChance ? 0 : randInt(1, p.age > 36 ? 3 : 2);
@@ -1320,20 +1391,59 @@ function updateRankings() {
   const p = state;
   // world rankings are an international thing — nothing to rank until you've actually debuted
   if (p.caps.intl <= 0) { p.rankBat = null; p.rankBowl = null; return; }
-  const batPoints = clamp(p.bat * 0.65 + battingFormScore(p) * 1.0 + p.reputation * 0.15, 0, 220);
-  const bowlPoints = clamp(p.bowl * 0.65 + bowlingFormScore(p) * 1.0 + p.reputation * 0.15, 0, 220);
-  p.rankBat = clamp(101 - Math.round(batPoints / 2.1), 1, 100);
-  p.rankBowl = clamp(101 - Math.round(bowlPoints / 2.1), 1, 100);
+  const i = p.stats.intl;
+  // you can only be ranked in a discipline you've actually done on the international stage —
+  // a specialist batter with a decent hidden bowling attribute but zero overs bowled is not a "ranked bowler"
+  if (i.innings > 0) {
+    const batPoints = clamp(p.bat * 0.55 + battingFormScore(p) * 1.3 + p.reputation * 0.1, 0, 220);
+    p.rankBat = clamp(101 - Math.round(batPoints / 2.1), 1, 100);
+  } else {
+    p.rankBat = null;
+  }
+  if (i.overs > 0) {
+    const bowlPoints = clamp(p.bowl * 0.55 + bowlingFormScore(p) * 1.3 + p.reputation * 0.1, 0, 220);
+    p.rankBowl = clamp(101 - Math.round(bowlPoints / 2.1), 1, 100);
+  } else {
+    p.rankBowl = null;
+  }
 }
 
 // established, well-regarded internationals get rested/rotated domestically — fewer state games as your caps and standing grow
+// how strong a club is FOR ITS OWN COUNTRY — nation baseline varies a lot, so an absolute
+// strength number isn't comparable across countries; this reconstructs the relative "mod" instead
+function clubRelativeStrength(p, strength) {
+  return strength - (NATION_STRENGTH[p.country] || 70) * 0.55;
+}
+
 function domesticMatchCountFor(p) {
   const caps = p.caps.intl;
   const established = p.reputation >= 55;
   if (established && caps >= 30) return 4;
   if (established && caps >= 18) return 6;
   if (established && caps >= 8) return 8;
+  // breaking into a stacked side as a nobody is genuinely hard — you'll ride the bench more often
+  if (!established) {
+    const rel = clubRelativeStrength(p, p.teamStrength);
+    if (rel >= 6) return MATCHES_PER_SEASON - 5;
+    if (rel >= 2) return MATCHES_PER_SEASON - 2;
+  }
   return MATCHES_PER_SEASON;
+}
+
+function franchiseMatchCountFor(p) {
+  const strength = p.franchiseTeamStrength != null ? p.franchiseTeamStrength : p.teamStrength;
+  const established = p.reputation >= 55;
+  if (!established) {
+    const rel = clubRelativeStrength(p, strength);
+    if (rel >= 6) return 2;
+    if (rel >= 2) return 3;
+  }
+  return 4;
+}
+
+function franchiseTeamStrength(p) {
+  const base = p.franchiseTeamStrength != null ? p.franchiseTeamStrength : p.teamStrength;
+  return clamp(base * 0.72 + ((p.bat + p.bowl) / 2) * 0.28, 15, 99);
 }
 
 function advanceToNextSeason() {
@@ -1652,18 +1762,42 @@ function renderCreate() {
 
 /* ================= club offers (creation + transfer window) ================= */
 
+function clubTagAndDesc(mod, forCreation) {
+  if (mod >= 6) return { tag: "Title Contenders", desc: forCreation
+    ? "A stacked squad with real expectations. Breaking into the XI as a nobody is genuinely hard — expect fewer starts early on — but the trophies and reputation are bigger if you force your way in. A real risk to take."
+    : "A stacked squad with real expectations — harder to force your way in, bigger trophies if you do." };
+  if (mod <= -6) return { tag: "Rebuilding Project", desc: forCreation
+    ? "A young side short on depth — they need bodies, so you'll play every match from day one. Regular cricket straight away, but titles will take longer to come."
+    : "A young side short on depth — an easier path to a regular starting spot and captaincy, but titles will take longer." };
+  return { tag: "Established Mid-Table Side", desc: forCreation
+    ? "A steady, competitive outfit with no fixed pecking order — a fair chance of regular cricket without the pressure of a title-chasing squad."
+    : "A steady, competitive outfit with no fixed pecking order." };
+}
+
+// used for the transfer window — a handful of clubs make an offer, and a proven player's prestige pays off
 function generateClubOffers(country, kind, excludeTeam, n, reputation) {
   const pool = teamPoolFor(country, kind).filter(t => t !== excludeTeam);
   const picks = pickN(pool, Math.min(n || 3, pool.length));
   return picks.map(team => {
     const mod = randInt(-10, 10);
-    let tag, desc;
-    if (mod >= 6) { tag = "Title Contenders"; desc = "A stacked squad with real expectations — harder to force your way in, bigger trophies if you do."; }
-    else if (mod <= -6) { tag = "Rebuilding Project"; desc = "A young side short on depth — an easier path to a regular starting spot and captaincy, but titles will take longer."; }
-    else { tag = "Established Mid-Table Side"; desc = "A steady, competitive outfit with no fixed pecking order."; }
-    const salary = contractSalaryFor(kind, mod, reputation);
+    const { tag, desc } = clubTagAndDesc(mod, false);
+    const salary = contractSalaryFor(kind, mod, reputation, true);
     return { team, mod, tag, desc, salary };
   });
+}
+
+// used at career creation — every club in the country is on the table, all paying the same standard
+// rookie wage, and choosing a stronger side is a genuine playing-time gamble rather than a free upgrade
+function allClubOffersFor(country, kind, excludeTeam, reputation) {
+  const pool = teamPoolFor(country, kind).filter(t => t !== excludeTeam);
+  const nationBaseline = NATION_STRENGTH[country] || 70;
+  return pool.map(team => {
+    const mod = randInt(-10, 10);
+    const strength = clamp(Math.round(nationBaseline * 0.55) + mod, 15, 99);
+    const { tag, desc } = clubTagAndDesc(mod, true);
+    const salary = contractSalaryFor(kind, mod, reputation, false);
+    return { team, mod, strength, tag, desc, salary };
+  }).sort((a, b) => b.strength - a.strength);
 }
 
 function renderClubChoice() {
@@ -1676,17 +1810,17 @@ function renderClubChoice() {
     <div class="hero" style="padding-top:8px;">
       <div class="mode-tag">Sign your first contract</div>
       <h1>Choose your ${label}</h1>
-      <p>Three clubs want you. Where you sign shapes your early career.</p>
+      <p>Every club in ${draft.country} is open to a rookie on the same standard deal — ${formatMoney(offers[0].salary)}/season. The only thing that changes is how hard it'll be to get a game.</p>
     </div>
     <div class="stack">
       ${offers.map((o, idx) => `
-        <div class="format-card" onclick="App.pickClub(${idx})">
-          <div class="format-icon">🏟️</div>
-          <div>
-            <div class="format-title">${o.team} <span class="badge" style="margin-left:6px;">${o.tag}</span></div>
-            <div class="format-desc">${o.desc}</div>
-            <div class="empty-note" style="padding-top:4px;">💰 ${formatMoney(o.salary)}/season</div>
+        <div class="perk-item" style="cursor:pointer;" onclick="App.pickClub(${idx})">
+          <div class="perk-head">
+            <span class="perk-icon">🏟️</span>
+            <div class="perk-name">${o.team}</div>
+            <span class="perk-price">⭐ ${o.strength}</span>
           </div>
+          <div class="perk-desc"><strong style="color:var(--text);">${o.tag}</strong> — ${o.desc}</div>
         </div>
       `).join("")}
     </div>
@@ -1701,17 +1835,18 @@ function renderFranchiseChoice() {
     <div class="hero" style="padding-top:8px;">
       <div class="mode-tag">And on the side...</div>
       <h1>Choose your T20 franchise</h1>
-      <p>You'll turn out here during the franchise window each season, alongside your first-class cricket.</p>
+      <p>You'll turn out here during the franchise window each season, alongside your first-class cricket. Same deal — every franchise pays the same ${formatMoney(offers[0].salary)}/season; the strength of the squad decides how easily you'll get a game.</p>
     </div>
     <div class="stack">
       ${offers.map((o, idx) => `
-        <div class="format-card" onclick="App.pickFranchise(${idx})">
-          <div class="format-icon">⚡</div>
-          <div>
-            <div class="format-title">${o.team} <span class="badge" style="margin-left:6px;">${o.tag}</span></div>
-            <div class="format-desc">${o.desc}</div>
-            <div class="empty-note" style="padding-top:4px;">💰 ${formatMoney(o.salary)}/season</div>
+        <div class="perk-item" style="cursor:pointer;" onclick="App.pickFranchise(${idx})">
+          <div class="perk-head">
+            <span class="perk-icon">⚡</span>
+            <div class="perk-name">${o.team}</div>
+            <span class="perk-price">⭐ ${o.strength}</span>
           </div>
+          <div class="perk-desc"><strong style="color:var(--text);">${o.tag}</strong> — ${o.desc}</div>
+        </div>
         </div>
       `).join("")}
     </div>
@@ -1758,6 +1893,7 @@ function currentFixtureFor(kind) {
   const p = state;
   if (kind === "domestic") return p.fixtures[p.matchIndex];
   if (kind === "franchise") return p.franchiseFixtures[p.franchiseIndex];
+  if (kind === "overseas") return p.overseasFixtures[p.overseasIndex];
   return p.intlFixtures[p.intlIndex];
 }
 
@@ -1766,7 +1902,10 @@ function renderMatchSetup(kind) {
   applyCurrentTheme(p);
   const fx = currentFixtureFor(kind);
   if (!fx) return renderHub();
-  const heading = kind === "intl" ? (fx.tag || "International") : kind === "franchise" ? `Franchise · ${fmtLabel(fx.fmt)}` : `Domestic · ${fmtLabel(fx.fmt)}`;
+  const heading = kind === "intl" ? (fx.tag || "International")
+    : kind === "franchise" ? `Franchise · ${fmtLabel(fx.fmt)}`
+    : kind === "overseas" ? `${p.overseasOffer.league} · ${p.overseasOffer.team}`
+    : `Domestic · ${fmtLabel(fx.fmt)}`;
   const toss = window.__matchToss;
   const tossReady = !toss || !toss.wonToss || !!toss.decision;
   screen(`
@@ -1937,6 +2076,7 @@ function renderHub() {
 function nextUpGround(p) {
   if (!p.domesticDone && p.fixtures[p.matchIndex]) return p.fixtures[p.matchIndex].ground;
   if (p.format === "ALL_ROUND" && !p.franchiseDone && p.franchiseFixtures[p.franchiseIndex]) return p.franchiseFixtures[p.franchiseIndex].ground;
+  if (!p.overseasDone && !p.overseasPending && p.overseasFixtures[p.overseasIndex]) return p.overseasFixtures[p.overseasIndex].ground;
   if (p.selectedThisSeason && !p.intlDone && p.intlFixtures[p.intlIndex]) return p.intlFixtures[p.intlIndex].ground;
   return null;
 }
@@ -1956,6 +2096,12 @@ function renderHubOverview() {
     actionButtons = `
       <button class="primary" onclick="App.goMatchSetup('franchise')">⚡ Play next match</button>
       <button class="secondary" onclick="App.simRestFranchise()">⏩ Sim rest of stint</button>
+    `;
+  } else if (!p.overseasDone && !p.overseasPending) {
+    phase = `Season ${p.season}/${MAX_SEASONS} · ${p.overseasOffer.league} stint (${p.overseasOffer.team}) ${p.overseasIndex + 1}/${p.overseasFixtures.length}`;
+    actionButtons = `
+      <button class="primary" onclick="App.goMatchSetup('overseas')">🌍 Play next match</button>
+      <button class="secondary" onclick="App.simRestOverseas()">⏩ Sim rest of stint</button>
     `;
   } else if (p.selectedThisSeason && !p.intlDone) {
     const curFx = p.intlFixtures[p.intlIndex];
@@ -2016,9 +2162,10 @@ function renderHubSidebar() {
   const p = state;
   const domUpcoming = p.domesticDone ? [] : p.fixtures.slice(p.matchIndex, p.matchIndex + 5);
   const franchiseUpcoming = (p.format !== "ALL_ROUND" || p.franchiseDone) ? [] : p.franchiseFixtures.slice(p.franchiseIndex);
+  const overseasUpcoming = (p.overseasDone || p.overseasPending) ? [] : (p.overseasFixtures || []).slice(p.overseasIndex);
   const intlUpcoming = (!p.selectedThisSeason || p.intlDone) ? [] : p.intlFixtures.slice(p.intlIndex);
   const domLabel = p.domesticKind === "FRANCHISE" ? "League" : "First-Class";
-  const anyUpcoming = domUpcoming.length || franchiseUpcoming.length || intlUpcoming.length;
+  const anyUpcoming = domUpcoming.length || franchiseUpcoming.length || overseasUpcoming.length || intlUpcoming.length;
   const tableLive = p.tournamentTable && p.bigEvent && p.bigEvent.active && p.selectedThisSeason && !p.intlDone;
 
   return `
@@ -2028,6 +2175,7 @@ function renderHubSidebar() {
       <div style="margin-top:6px;">
         ${!anyUpcoming ? `<div class="empty-note">Nothing scheduled right now.</div>` : ""}
         ${intlUpcoming.map(f => fixtureRow(f, f.tag || "International")).join("")}
+        ${overseasUpcoming.map(f => fixtureRow(f, p.overseasOffer.league)).join("")}
         ${franchiseUpcoming.map(f => fixtureRow(f, "Franchise")).join("")}
         ${domUpcoming.map(f => fixtureRow(f, domLabel)).join("")}
       </div>
@@ -2036,8 +2184,8 @@ function renderHubSidebar() {
       <div class="section-title">World rankings</div>
       ${p.caps.intl > 0 ? `
         <div class="stat-grid two" style="margin-top:10px;">
-          ${ratingBar("Batting", "#" + p.rankBat)}
-          ${ratingBar("Bowling", "#" + p.rankBowl)}
+          ${ratingBar("Batting", p.rankBat != null ? "#" + p.rankBat : "Unranked")}
+          ${ratingBar("Bowling", p.rankBowl != null ? "#" + p.rankBowl : "Unranked")}
         </div>
       ` : `
         <div class="empty-note" style="padding:10px 0 0;">Unranked — world rankings only kick in once you've debuted internationally.</div>
@@ -2178,7 +2326,7 @@ function renderHubCareer() {
 
 function renderHubShop() {
   const p = state;
-  const owned = p.perks || {};
+  const roster = perksForRole(p.role);
   return `
     <div class="card">
       <div class="section-title">Bank balance</div>
@@ -2186,32 +2334,41 @@ function renderHubShop() {
         ${ratingBar("Spendable", formatMoney(p.bankBalance || 0))}
         ${ratingBar("Career earned", formatMoney(p.earnings || 0))}
       </div>
-      <div class="empty-note" style="padding-top:8px;">Spend what you've earned on permanent perks — a second way to get better besides just grinding out reputation.</div>
+      <div class="empty-note" style="padding-top:8px;">Spend what you've earned on permanent perks — a second way to get better besides just grinding out reputation. ${p.role === "Bowler" ? "As a bowler, only bowling and mental perks are open to you." : (p.role === "Batsman" || p.role === "Wicketkeeper-Batsman") ? "As a batter, only batting and mental perks are open to you." : ""}</div>
     </div>
-    ${PERK_CATEGORIES.map(cat => `
+    ${PERK_CATEGORIES.map(cat => {
+      const perksInCat = roster.filter(perk => perk.category === cat.key);
+      if (!perksInCat.length) return "";
+      return `
       <div class="card">
         <div class="section-title">${cat.label}</div>
         <div class="stack" style="margin-top:10px;">
-          ${PERKS.filter(perk => perk.category === cat.key).map(perk => {
-            const isOwned = !!owned[perk.key];
-            const canAfford = (p.bankBalance || 0) >= perk.price;
+          ${perksInCat.map(perk => {
+            const lvl = perkLevel(perk.key);
+            const maxLvl = perk.levels.length;
+            const atMax = lvl >= maxLvl;
+            const next = perk.levels[lvl];
+            const canAfford = !atMax && (p.bankBalance || 0) >= next.price;
+            const levelTag = lvl === 0 ? "Not owned" : `Level ${lvl}/${maxLvl}`;
             return `
-              <div class="perk-item ${isOwned ? "owned" : ""}" title="${perk.desc}">
+              <div class="perk-item ${lvl > 0 ? "owned" : ""}" title="${perk.desc}">
                 <div class="perk-head">
                   <span class="perk-icon">${perk.icon}</span>
                   <div class="perk-name">${perk.name}</div>
-                  ${isOwned
-                    ? `<span class="perk-owned-tag">✅ Owned</span>`
-                    : `<span class="perk-price">${formatMoney(perk.price)}</span>`}
+                  <span class="${lvl > 0 ? "perk-owned-tag" : "perk-price"}">${levelTag}</span>
                 </div>
                 <div class="perk-desc">${perk.desc}</div>
-                ${isOwned ? "" : `<button class="secondary perk-buy-btn" ${canAfford ? "" : "disabled"} onclick="App.buyPerk('${perk.key}')">Buy</button>`}
+                ${lvl > 0 ? `<div class="perk-desc" style="margin-top:4px;color:var(--accent);">Current bonus: ${perk.category === "MENTAL" ? formatPercent(perk.levels[lvl - 1].value) : "+" + perk.levels[lvl - 1].value}</div>` : ""}
+                ${atMax
+                  ? `<div class="perk-desc" style="margin-top:6px;">✅ Maxed out.</div>`
+                  : `<button class="secondary perk-buy-btn" ${canAfford ? "" : "disabled"} onclick="App.buyPerk('${perk.key}')">${lvl === 0 ? "Buy" : "Upgrade"} — ${formatMoney(next.price)} for ${perk.category === "MENTAL" ? formatPercent(next.value) : "+" + next.value}</button>`}
               </div>
             `;
           }).join("")}
         </div>
       </div>
-    `).join("")}
+    `;
+    }).join("")}
   `;
 }
 
@@ -2300,7 +2457,10 @@ function renderMatchResult() {
   } else {
     figureBig = "DNB"; figureSub = "Did not feature much this match";
   }
-  const heading = r.kind === "intl" ? (r.tag || "International") : r.kind === "franchise" ? `Franchise · ${fmtLabel(r.fmt)}` : `Domestic · ${fmtLabel(r.fmt)}`;
+  const heading = r.kind === "intl" ? (r.tag || "International")
+    : r.kind === "overseas" ? (r.tag || "Overseas")
+    : r.kind === "franchise" ? `Franchise · ${fmtLabel(r.fmt)}`
+    : `Domestic · ${fmtLabel(r.fmt)}`;
 
   screen(`
     ${masthead()}
@@ -2814,14 +2974,14 @@ const App = {
   confirmCreate() {
     if (!draft.name.trim()) return;
     const kind = draft.format === "SHORT" ? "FRANCHISE" : "FC";
-    window.__clubOffers = generateClubOffers(draft.country, kind, null, 3, 20);
+    window.__clubOffers = allClubOffersFor(draft.country, kind, null, 20);
     renderClubChoice();
   },
   pickClub(idx) {
     window.__chosenClub = window.__clubOffers[idx];
     window.__clubOffers = null;
     if (draft.format === "ALL_ROUND") {
-      window.__franchiseOffers = generateClubOffers(draft.country, "FRANCHISE", window.__chosenClub.team, 3, 20);
+      window.__franchiseOffers = allClubOffersFor(draft.country, "FRANCHISE", window.__chosenClub.team, 20);
       return renderFranchiseChoice();
     }
     App.finalizeCreate();
@@ -2833,14 +2993,17 @@ const App = {
   },
   finalizeCreate() {
     state = freshPlayer({ ...draft, name: draft.name.trim() });
-    const nationBaseline = NATION_STRENGTH[state.country] || 70;
     state.team = window.__chosenClub.team;
-    state.teamStrength = clamp(Math.round(nationBaseline * 0.55) + window.__chosenClub.mod, 15, 99);
+    state.teamStrength = window.__chosenClub.strength;
     state.contract = { team: window.__chosenClub.team, salary: window.__chosenClub.salary };
     if (state.format === "ALL_ROUND") {
       state.franchiseTeam = window.__chosenFranchise.team;
+      state.franchiseTeamStrength = window.__chosenFranchise.strength;
       state.franchiseContract = { team: window.__chosenFranchise.team, salary: window.__chosenFranchise.salary };
-    } else if (state.format === "SHORT") state.franchiseTeam = state.team;
+    } else if (state.format === "SHORT") {
+      state.franchiseTeam = state.team;
+      state.franchiseTeamStrength = state.teamStrength;
+    }
     window.__chosenClub = null; window.__chosenFranchise = null;
     currentSaveId = "save_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
     startSeason();
@@ -2851,10 +3014,14 @@ const App = {
 
   buyPerk(key) {
     const p = state;
-    const perk = PERKS.find(pk => pk.key === key);
-    if (!perk || p.perks[key] || (p.bankBalance || 0) < perk.price) return;
-    p.bankBalance -= perk.price;
-    p.perks[key] = true;
+    const perk = perksForRole(p.role).find(pk => pk.key === key);
+    if (!perk) return;
+    const lvl = perkLevel(key);
+    if (lvl >= perk.levels.length) return;
+    const next = perk.levels[lvl];
+    if ((p.bankBalance || 0) < next.price) return;
+    p.bankBalance -= next.price;
+    p.perks[key] = lvl + 1;
     save();
     renderHub();
   },
@@ -3012,6 +3179,7 @@ const App = {
     const note = [li.tossNote, bowlNote].filter(Boolean).join(" ") || null;
     if (li.kind === "domestic") playDomesticMatch(perf, note);
     else if (li.kind === "franchise") playFranchiseMatch(perf, note);
+    else if (li.kind === "overseas") playOverseasMatch(perf, note);
     else playIntlMatch(perf, note);
     window.__live = null;
     renderMatchResult();
@@ -3025,6 +3193,7 @@ const App = {
     p.team = o.team;
     p.teamStrength = clamp(Math.round(nationBaseline * 0.55) + o.mod, 15, 99);
     p.contract = { team: o.team, salary: o.salary };
+    if (p.format === "SHORT") { p.franchiseTeam = o.team; p.franchiseTeamStrength = p.teamStrength; }
     if (p.isDomesticCaptain) p.isDomesticCaptain = false;
     window.__transferOffers = null;
     save();
@@ -3052,9 +3221,11 @@ const App = {
     return renderHub();
   },
   acceptOverseas() {
-    playOverseasStint();
-    renderOverseasSummary();
+    startOverseasStint();
+    save();
+    renderHub();
   },
+  simRestOverseas() { simRestOfOverseas(); renderOverseasSummary(); },
   declineOverseas() {
     const p = state;
     p.overseasPending = false; p.overseasDone = true;
@@ -3102,6 +3273,10 @@ const App = {
     if (kind === "franchise") {
       if (!p.franchiseDone) return renderHub();
       return renderFranchiseSummary();
+    }
+    if (kind === "overseas") {
+      if (!p.overseasDone) return renderHub();
+      return renderOverseasSummary();
     }
     if (!p.intlDone) return renderHub();
     return renderIntlSummary();
@@ -3218,12 +3393,13 @@ window.App = App;
 /* ================= boot ================= */
 
 function freshPlayer(d) {
-  const potential = Math.round(clamp(rand(58, 96) + (Math.random() < 0.08 ? rand(4, 10) : 0), 55, 99));
+  // a 90+ potential is a genuine outlier — most careers cap out well short of 99
+  const potential = Math.round(clamp(rand(55, 85) + (Math.random() < 0.05 ? rand(8, 18) : 0), 50, 99));
   let bat = 0, bowl = 0, field = 30;
-  if (d.role === "Batsman") { bat = randInt(38, 52); bowl = randInt(3, 12); field = randInt(35, 48); }
-  else if (d.role === "Bowler") { bat = randInt(3, 14); bowl = randInt(38, 52); field = randInt(35, 48); }
-  else if (d.role === "All-rounder") { bat = randInt(28, 40); bowl = randInt(28, 40); field = randInt(38, 50); }
-  else { bat = randInt(35, 48); bowl = randInt(2, 6); field = randInt(48, 62); }
+  if (d.role === "Batsman") { bat = randInt(55, 68); bowl = randInt(3, 10); field = randInt(35, 48); }
+  else if (d.role === "Bowler") { bat = randInt(3, 12); bowl = randInt(55, 68); field = randInt(35, 48); }
+  else if (d.role === "All-rounder") { bat = randInt(42, 55); bowl = randInt(42, 55); field = randInt(38, 50); }
+  else { bat = randInt(52, 64); bowl = randInt(2, 6); field = randInt(48, 62); }
 
   const domesticKind = d.format === "SHORT" ? "FRANCHISE" : "FC";
   const team = choice(teamPoolFor(d.country, domesticKind));
@@ -3239,6 +3415,7 @@ function freshPlayer(d) {
     age: 18, potential, bat, bowl, field,
     reputation: Math.round(clamp(potential / 4 + rand(-5, 5), 10, 40)),
     teamStrength: clamp(Math.round(nationBaseline * 0.55) + randInt(-6, 6), 25, 95),
+    franchiseTeamStrength: null,
     isDomesticCaptain: false, isNationalCaptain: false,
     battingApproach: "Balanced", bowlingApproach: "Balanced",
     sponsor: null, sponsorHistory: [],
@@ -3253,6 +3430,7 @@ function freshPlayer(d) {
     franchiseFixtures: [], franchiseIndex: 0,
     domesticDone: false, intlDone: false, franchiseDone: false,
     overseasPending: false, overseasDone: true, overseasOffer: null, franchiseHistory: [],
+    overseasFixtures: [], overseasIndex: 0,
     retired: false, forcedRetireOffer: false,
     caps: { domestic: 0, intl: 0, franchise: 0, overseas: 0 },
     formatCaps: { TEST: 0, ODI: 0, T20: 0 },
