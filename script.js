@@ -165,8 +165,15 @@ const BONUS_BASE = { fifty: 1000, hundred: 4000, threeWkt: 1000, fiveWkt: 4000, 
 const BONUS_TIER_MULT = { domestic: 0.3, franchise: 0.6, overseas: 1, intl: 1.2 };
 const TROPHY_BONUS = { domestic: 15000, major: 150000 };
 
-function awardMatchEarnings(tier, fmt, perf, won) {
+// earnings is the lifetime "career total" stat and never shrinks; bankBalance is what the shop can actually spend
+function addEarnings(amount) {
   const p = state;
+  p.earnings = (p.earnings || 0) + amount;
+  p.seasonEarnings = (p.seasonEarnings || 0) + amount;
+  p.bankBalance = (p.bankBalance || 0) + amount;
+}
+
+function awardMatchEarnings(tier, fmt, perf, won) {
   const fee = tier === "intl" ? (MATCH_FEE[fmt] || MATCH_FEE.T20) : MATCH_FEE[tier];
   const mult = BONUS_TIER_MULT[tier];
   let bonus = 0;
@@ -180,8 +187,7 @@ function awardMatchEarnings(tier, fmt, perf, won) {
   }
   if (won) bonus += BONUS_BASE.win;
   const total = Math.round(fee + bonus * mult);
-  p.earnings = (p.earnings || 0) + total;
-  p.seasonEarnings = (p.seasonEarnings || 0) + total;
+  addEarnings(total);
   return total;
 }
 
@@ -194,7 +200,7 @@ const WHEEL_SEGMENTS = [
 
 const DB_KEY = "cricDynastyDB";
 const LAST_USER_KEY = "cricDynastyLastUser";
-const SAVE_VERSION = 7;
+const SAVE_VERSION = 8;
 
 const MAX_SEASONS = 20;
 const MATCHES_PER_SEASON = 10;
@@ -355,6 +361,51 @@ const BOWLING_APPROACHES = {
   Balanced: { wicketMult: 1.0, econAdj: 0, label: "Balanced", desc: "Mix it up and take what comes." },
   Attack: { wicketMult: 1.32, econAdj: 1.2, label: "Attack", desc: "Bowl for wickets — more threat, more boundaries conceded." },
 };
+
+/* ================= perk shop ================= */
+// bought with money instead of grinding reputation — flat rating bonuses (some approach-gated) plus two reputation-flow perks
+const PERKS = [
+  { key: "concreteBlocker", icon: "🧱", name: "Concrete Blocker", category: "BAT", price: 60000,
+    desc: "+4 effective batting rating whenever you play Cautious — technique holds up under sustained pressure." },
+  { key: "sixMachine", icon: "💥", name: "Six Machine", category: "BAT", price: 70000,
+    desc: "+4 effective batting rating whenever you play Aggressive — loads up for the boundary without losing shape." },
+  { key: "bigMatchPlayer", icon: "🎯", name: "Big Match Player", category: "BAT", price: 110000,
+    desc: "+3 effective batting rating in every approach — a general step up in composure when the stakes are highest." },
+  { key: "lockdown", icon: "🔒", name: "Lockdown", category: "BOWL", price: 60000,
+    desc: "+4 effective bowling rating whenever you play Contain — relentless discipline, barely a bad ball in the over." },
+  { key: "wicketHunter", icon: "🏹", name: "Wicket Hunter", category: "BOWL", price: 70000,
+    desc: "+4 effective bowling rating whenever you play Attack — always searching for the breakthrough." },
+  { key: "iceNerve", icon: "❄️", name: "Ice Nerve", category: "BOWL", price: 110000,
+    desc: "+3 effective bowling rating in every approach — never rattled, whatever the moment." },
+  { key: "mediaSavvy", icon: "📣", name: "Media Savvy", category: "MENTAL", price: 130000,
+    desc: "+20% reputation gained from every good performance — you know how to work a headline." },
+  { key: "ironResolve", icon: "🛡️", name: "Iron Resolve", category: "MENTAL", price: 130000,
+    desc: "Halves the reputation you lose from bad days and defeats — setbacks barely register." },
+];
+const PERK_CATEGORIES = [
+  { key: "BAT", label: "Batting" },
+  { key: "BOWL", label: "Bowling" },
+  { key: "MENTAL", label: "Mental edge" },
+];
+
+function hasPerk(key) { return !!(state && state.perks && state.perks[key]); }
+
+function perkBatBonus(approach) {
+  if (!state || !state.perks) return 0;
+  let bonus = 0;
+  if (state.perks.concreteBlocker && approach === "Cautious") bonus += 4;
+  if (state.perks.sixMachine && approach === "Aggressive") bonus += 4;
+  if (state.perks.bigMatchPlayer) bonus += 3;
+  return bonus;
+}
+function perkBowlBonus(approach) {
+  if (!state || !state.perks) return 0;
+  let bonus = 0;
+  if (state.perks.lockdown && approach === "Contain") bonus += 4;
+  if (state.perks.wicketHunter && approach === "Attack") bonus += 4;
+  if (state.perks.iceNerve) bonus += 3;
+  return bonus;
+}
 
 // Tests/first-class matches give a batter up to two real innings — this rolls one
 function simulateBattingInnings(rating, oppStrength, fmt, approach) {
@@ -518,8 +569,8 @@ function simulatePlayerPerformance(p, oppStrength, fmt) {
   const battingApproach = p.battingApproach || "Balanced";
   const bowlingApproach = p.bowlingApproach || "Balanced";
   const cond = matchConditionsFor(p);
-  const batRating = p.bat * cond.battingMult;
-  const bowlRating = p.bowl * cond.bowlMult;
+  const batRating = p.bat * cond.battingMult + perkBatBonus(battingApproach);
+  const bowlRating = p.bowl * cond.bowlMult + perkBowlBonus(bowlingApproach);
   if (doesBat && p.role !== "Bowler") Object.assign(perf, simulateBatting(batRating, oppStrength, fmt, battingApproach));
   else if (doesBat) Object.assign(perf, simulateBatting(Math.max(batRating, 8), oppStrength, fmt, "Balanced"));
   if (doesBowl) Object.assign(perf, simulateBowling(bowlRating, oppStrength, fmt, bowlingApproach));
@@ -710,8 +761,7 @@ function startSeason() {
   p.seasonOverseasStats = emptyStatBlock();
   p.seasonEarnings = 0;
   const salaryThisSeason = (p.contract ? p.contract.salary : 0) + (p.franchiseContract ? p.franchiseContract.salary : 0);
-  p.earnings = (p.earnings || 0) + salaryThisSeason;
-  p.seasonEarnings += salaryThisSeason;
+  addEarnings(salaryThisSeason);
   p.domesticDone = false; p.intlDone = false; p.franchiseDone = p.format !== "ALL_ROUND";
   p.overseasPending = false; p.overseasDone = true; p.overseasOffer = null;
   p.selectedThisSeason = false;
@@ -781,8 +831,7 @@ function finishDomesticSeason() {
   if (champion) {
     const label = p.domesticKind === "FRANCHISE" ? "T20 League Title" : "First-Class Championship";
     p.trophies.push({ season: p.season, name: `${p.team} — ${label}${p.isDomesticCaptain ? " (as captain)" : ""}`, icon: "🏆" });
-    p.earnings = (p.earnings || 0) + TROPHY_BONUS.domestic;
-    p.seasonEarnings = (p.seasonEarnings || 0) + TROPHY_BONUS.domestic;
+    addEarnings(TROPHY_BONUS.domestic);
   }
   const s = p.seasonDomStats;
   let award = null;
@@ -829,8 +878,7 @@ function setupOverseasPhase() {
 function playOverseasStint() {
   const p = state;
   const offer = p.overseasOffer;
-  p.earnings = (p.earnings || 0) + offer.fee;
-  p.seasonEarnings = (p.seasonEarnings || 0) + offer.fee;
+  addEarnings(offer.fee);
   const pool = T20_FRANCHISES[offer.country].filter(t => t !== offer.team);
   const fixtures = pickN(pool, Math.min(4, pool.length)).map(opp => ({ opponent: opp, oppStrength: randInt(45, 78), fmt: "FRANCHISE", ground: groundFor(offer.country) }));
   fixtures.forEach(fx => {
@@ -1138,8 +1186,7 @@ function finishInternationalWindow() {
     }
     if (trophy) {
       p.trophies.push(trophy);
-      p.earnings = (p.earnings || 0) + TROPHY_BONUS.major;
-      p.seasonEarnings = (p.seasonEarnings || 0) + TROPHY_BONUS.major;
+      addEarnings(TROPHY_BONUS.major);
     }
     p.lastIntlSummary = { stats: { ...s }, wins, bigEvent: true, eventName: p.bigEvent.name, finishTag, trophy, finalTable: p.tournamentTable, host: p.worldCupHost };
   } else {
@@ -1165,6 +1212,8 @@ function gainReputation(perf, won) {
   innScores.forEach(r => { if (r >= 100) delta += 4; else if (r >= 50) delta += 1.5; });
   if (perf.bowled && perf.wickets >= 5) delta += 4;
   else if (perf.bowled && perf.wickets >= 3) delta += 1.2;
+  if (delta > 0 && hasPerk("mediaSavvy")) delta *= 1.2;
+  if (delta < 0 && hasPerk("ironResolve")) delta *= 0.5;
   p.reputation = clamp(p.reputation + delta, 0, 100);
 }
 
@@ -1203,7 +1252,8 @@ function applyWheelEffect(segment) {
       return "Pre-season training camp paid off — a boost to both bat and ball.";
     case "bumper_deal":
       p.reputation = clamp(p.reputation + 15, 0, 100);
-      return "A bumper endorsement deal lands — your profile is bigger than ever.";
+      addEarnings(40000);
+      return "A bumper endorsement deal lands — your profile is bigger than ever, and $40k richer.";
     case "fan_favourite":
       p.reputation = clamp(p.reputation + 8, 0, 100); p.teamStrength = clamp(p.teamStrength + 3, 1, 99);
       return "The fans are firmly behind you heading into the new season.";
@@ -1858,8 +1908,8 @@ function renderLiveBowling() {
 function renderHub() {
   const p = state;
   applyCurrentTheme(p);
-  const tabs = ["Overview", "Career"];
-  const mainBody = p.hubTab === "Career" ? renderHubCareer() : renderHubOverview();
+  const tabs = ["Overview", "Career", "Shop"];
+  const mainBody = p.hubTab === "Career" ? renderHubCareer() : p.hubTab === "Shop" ? renderHubShop() : renderHubOverview();
 
   screen(`
     ${masthead(`<button class="link-btn" onclick="App.goFeedback()">💬 Feedback</button>`)}
@@ -2123,6 +2173,44 @@ function renderHubCareer() {
           : `<div class="empty-note">No individual awards yet.</div>`}
       </div>
     </div>
+  `;
+}
+
+function renderHubShop() {
+  const p = state;
+  const owned = p.perks || {};
+  return `
+    <div class="card">
+      <div class="section-title">Bank balance</div>
+      <div class="stat-grid two" style="margin-top:10px;">
+        ${ratingBar("Spendable", formatMoney(p.bankBalance || 0))}
+        ${ratingBar("Career earned", formatMoney(p.earnings || 0))}
+      </div>
+      <div class="empty-note" style="padding-top:8px;">Spend what you've earned on permanent perks — a second way to get better besides just grinding out reputation.</div>
+    </div>
+    ${PERK_CATEGORIES.map(cat => `
+      <div class="card">
+        <div class="section-title">${cat.label}</div>
+        <div class="stack" style="margin-top:10px;">
+          ${PERKS.filter(perk => perk.category === cat.key).map(perk => {
+            const isOwned = !!owned[perk.key];
+            const canAfford = (p.bankBalance || 0) >= perk.price;
+            return `
+              <div class="format-card" title="${perk.desc}" style="cursor:default;${isOwned ? "opacity:0.7;" : ""}">
+                <div class="format-icon">${perk.icon}</div>
+                <div style="flex:1;">
+                  <div class="format-title">${perk.name}</div>
+                  <div class="format-desc">${perk.desc}</div>
+                </div>
+                ${isOwned
+                  ? `<span class="badge" style="flex-shrink:0;">✅ Owned</span>`
+                  : `<button class="secondary" style="flex-shrink:0;" ${canAfford ? "" : "disabled"} onclick="App.buyPerk('${perk.key}')">💰 ${formatMoney(perk.price)}</button>`}
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `).join("")}
   `;
 }
 
@@ -2760,6 +2848,16 @@ const App = {
 
   setHubTab(t) { state.hubTab = t; save(); renderHub(); },
 
+  buyPerk(key) {
+    const p = state;
+    const perk = PERKS.find(pk => pk.key === key);
+    if (!perk || p.perks[key] || (p.bankBalance || 0) < perk.price) return;
+    p.bankBalance -= perk.price;
+    p.perks[key] = true;
+    save();
+    renderHub();
+  },
+
   goSeasonSummary() {
     if (!state.domesticDone) return renderHub();
     if (!state.franchiseDone) return renderFranchiseSummary();
@@ -2839,7 +2937,7 @@ const App = {
   chooseBattingPhase(k) {
     const p = state;
     const li = window.__live;
-    const effRating = (p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult;
+    const effRating = (p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult + perkBatBonus(k);
     const seg = simulateBattingPhase(effRating, li.fx.oppStrength, li.fx.fmt, k);
     li.bat.runs += seg.runs; li.bat.balls += seg.balls; li.bat.fours += seg.fours; li.bat.sixes += seg.sixes;
     li.battingPhase++;
@@ -2863,7 +2961,7 @@ const App = {
     const longFmt = fmt === "TEST" || fmt === "FC";
     const cap = bowlingOversCap(fmt);
     const overs = Math.max(1, Math.min(bowlingSpellOvers(fmt), cap - li.bowl.overs));
-    const effRating = p.bowl * li.cond.bowlMult;
+    const effRating = p.bowl * li.cond.bowlMult + perkBowlBonus(k);
     const seg = simulateBowlingSpell(effRating, li.fx.oppStrength, fmt, k, overs);
     li.bowl.overs += seg.overs; li.bowl.wickets += seg.wickets; li.bowl.runsConceded += seg.runsConceded;
     li.bowlingSpellIndex++;
@@ -2881,17 +2979,20 @@ const App = {
     const li = window.__live;
     const p = state;
     const perf = {};
+    const battingApproach = p.battingApproach || "Balanced";
+    const bowlingApproach = p.bowlingApproach || "Balanced";
+    const liveBatRating = (p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult + perkBatBonus(battingApproach);
     if (li.doesBat && !li.bat.out && li.battingPhase === 0 && !li.bat1) {
-      Object.assign(perf, simulateBatting((p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult, li.fx.oppStrength, li.fx.fmt, p.battingApproach || "Balanced"));
+      Object.assign(perf, simulateBatting(liveBatRating, li.fx.oppStrength, li.fx.fmt, battingApproach));
     } else if (li.doesBat && li.bat1 && li.battingPhase === 0 && !li.bat.out && li.bat.balls === 0) {
       // 1st innings already fully played, 2nd innings not yet started live — simulate it in full
-      const inn2 = simulateBattingInnings((p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult, li.fx.oppStrength, li.fx.fmt, p.battingApproach || "Balanced");
+      const inn2 = simulateBattingInnings(liveBatRating, li.fx.oppStrength, li.fx.fmt, battingApproach);
       Object.assign(perf, { batted: true, runs: li.bat1.runs, balls: Math.max(li.bat1.balls, 1), fours: li.bat1.fours, sixes: li.bat1.sixes, out: li.bat1.out, innings2: inn2 });
     } else if (li.doesBat) {
       Object.assign(perf, finalBattingPerf(li));
     }
     if (li.doesBowl && !li.skippedTestBowling && li.bowlingSpellIndex === 0) {
-      Object.assign(perf, simulateBowling(p.bowl * li.cond.bowlMult, li.fx.oppStrength, li.fx.fmt, p.bowlingApproach || "Balanced"));
+      Object.assign(perf, simulateBowling(p.bowl * li.cond.bowlMult + perkBowlBonus(bowlingApproach), li.fx.oppStrength, li.fx.fmt, bowlingApproach));
     } else if (li.doesBowl) {
       perf.bowled = true; perf.overs = li.bowl.overs; perf.wickets = li.bowl.wickets; perf.runsConceded = li.bowl.runsConceded;
     }
@@ -3040,8 +3141,7 @@ const App = {
     p.sponsor = s; p.sponsorHistory.push({ season: p.season, name: s.name });
     if (s.key === "ratingBoost") { p.bat = clamp(p.bat + 3, 1, 99); p.bowl = clamp(p.bowl + 3, 1, 99); }
     if (s.key === "reputationBoost") p.reputation = clamp(p.reputation + 15, 0, 100);
-    p.earnings = (p.earnings || 0) + s.value;
-    p.seasonEarnings = (p.seasonEarnings || 0) + s.value;
+    addEarnings(s.value);
     save();
     App.advanceEventQueue();
   },
@@ -3141,7 +3241,7 @@ function freshPlayer(d) {
     isDomesticCaptain: false, isNationalCaptain: false,
     battingApproach: "Balanced", bowlingApproach: "Balanced",
     sponsor: null, sponsorHistory: [],
-    earnings: 0, seasonEarnings: 0, contract: null, franchiseContract: null,
+    earnings: 0, seasonEarnings: 0, bankBalance: 0, perks: {}, contract: null, franchiseContract: null,
     rankBat: null, rankBowl: null,
     season: 1,
     matchIndex: 0, fixtures: [],
