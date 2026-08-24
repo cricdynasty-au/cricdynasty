@@ -180,7 +180,14 @@ function addEarnings(amount) {
   p.bankBalance = (p.bankBalance || 0) + amount;
 }
 
-function awardMatchEarnings(tier, fmt, perf, won) {
+// accepts either a boolean (legacy win/loss call sites) or a "WIN"/"LOSS"/"DRAW" string (Test/FC)
+function normalizeResult(resultOrWon) {
+  if (resultOrWon === "WIN" || resultOrWon === "LOSS" || resultOrWon === "DRAW") return resultOrWon;
+  return resultOrWon ? "WIN" : "LOSS";
+}
+
+function awardMatchEarnings(tier, fmt, perf, resultOrWon) {
+  const result = normalizeResult(resultOrWon);
   const fee = tier === "intl" ? (MATCH_FEE[fmt] || MATCH_FEE.T20) : MATCH_FEE[tier];
   const mult = BONUS_TIER_MULT[tier];
   let bonus = 0;
@@ -192,7 +199,8 @@ function awardMatchEarnings(tier, fmt, perf, won) {
     if (perf.wickets >= 5) bonus += BONUS_BASE.fiveWkt;
     else if (perf.wickets >= 3) bonus += BONUS_BASE.threeWkt;
   }
-  if (won) bonus += BONUS_BASE.win;
+  if (result === "WIN") bonus += BONUS_BASE.win;
+  else if (result === "DRAW") bonus += BONUS_BASE.win * 0.3;
   const total = Math.round(fee + bonus * mult);
   addEarnings(total);
   return total;
@@ -618,6 +626,104 @@ function autoTossDecision(pitch) {
   return Math.random() < 0.75 ? pitch.rightCall : (pitch.rightCall === "BAT" ? "BOWL" : "BAT");
 }
 
+/* ================= Test/FC match engine — real 5-day, up-to-4-innings matches ================= */
+// Tests and first-class matches now run on a genuine day/session clock (5 days x 3 sessions = 15
+// sessions total) with up to 4 team innings, real draws when time runs out, and real innings defeats
+// when one side's lead is too big to make the follow-up innings worthwhile. Team totals here are
+// deliberately independent of the player's own personal figures (which are tracked separately via the
+// live phases / bulk simulateBatting calls) — exactly like the rest of the game, a great personal day
+// nudges the team's chances rather than mechanically becoming the team score.
+
+const SESSIONS_PER_DAY = 3;
+const TEST_MATCH_SESSIONS = 15; // 5 days x 3 sessions, for both Test and First-Class
+
+// one team's innings, purely from the strength matchup — how many runs, and how many sessions it ate up
+function simulateInningsTotal(battingStrength, bowlingStrength) {
+  const diff = battingStrength - bowlingStrength;
+  const meanSessions = clamp(3.7 + diff / 18, 1.3, 6);
+  const sessionsUsed = clamp(Math.round(meanSessions + rand(-1.2, 1.2)), 1, 8);
+  const runsPerSession = clamp(58 + diff * 0.48 + rand(-16, 16), 26, 130);
+  const runs = Math.max(15, Math.round(sessionsUsed * runsPerSession));
+  return { runs, sessionsUsed };
+}
+
+// the full team-level match: up to 4 innings, draw if time runs out, innings defeat if the gap is huge,
+// otherwise a real chase in the 4th innings. myStrength/oppStrength already blend in player rating.
+function simulateTestMatchEngine(meBatsFirst, myStrength, oppStrength) {
+  const order = meBatsFirst ? ["me", "opp"] : ["opp", "me"];
+  const strengthFor = { me: myStrength, opp: oppStrength };
+  const slots = [];
+  const totals = { me: 0, opp: 0 };
+  let sessionsLeft = TEST_MATCH_SESSIONS;
+
+  function playSlot(who) {
+    if (sessionsLeft <= 0) return false;
+    const other = who === "me" ? "opp" : "me";
+    const seg = simulateInningsTotal(strengthFor[who], strengthFor[other]);
+    const used = Math.min(seg.sessionsUsed, sessionsLeft);
+    const timeUp = used < seg.sessionsUsed;
+    const runs = timeUp ? Math.max(0, Math.round(seg.runs * (used / seg.sessionsUsed))) : seg.runs;
+    slots.push({ who, runs, sessionsUsed: used, unfinished: timeUp });
+    totals[who] += runs;
+    sessionsLeft -= used;
+    return !timeUp;
+  }
+
+  if (!playSlot(order[0])) return { slots, totals, result: "DRAW" };
+  if (!playSlot(order[1])) return { slots, totals, result: "DRAW" };
+
+  const firstWho = order[0], secondWho = order[1];
+  const lead = totals[firstWho] - totals[secondWho];
+  const leaderWho = lead >= 0 ? firstWho : secondWho;
+  const trailerWho = lead >= 0 ? secondWho : firstWho;
+  const absLead = Math.abs(lead);
+  if (absLead >= 190 && Math.random() < clamp(0.15 + absLead / 480, 0.15, 0.7)) {
+    return { slots, totals, result: leaderWho === "me" ? "WIN" : "LOSS", marginKind: "innings", marginRuns: absLead, trailerWho };
+  }
+
+  if (!playSlot(order[0])) return { slots, totals, result: "DRAW" };
+
+  // 4th innings is a real chase — reach the target and win, get bowled out short and lose, run out of time and draw
+  const settingWho = order[0], chasingWho = order[1];
+  const target = totals[settingWho] - totals[chasingWho] + 1;
+  if (sessionsLeft <= 0) return { slots, totals, result: "DRAW" };
+  const chaseSeg = simulateInningsTotal(strengthFor[chasingWho], strengthFor[settingWho]);
+  const chaseUsed = Math.min(chaseSeg.sessionsUsed, sessionsLeft);
+  const chaseTimeUp = chaseUsed < chaseSeg.sessionsUsed;
+  if (chaseTimeUp) {
+    const partialRuns = Math.max(0, Math.round(chaseSeg.runs * (chaseUsed / chaseSeg.sessionsUsed)));
+    slots.push({ who: chasingWho, runs: partialRuns, sessionsUsed: chaseUsed, unfinished: true });
+    totals[chasingWho] += partialRuns;
+    return { slots, totals, result: "DRAW" };
+  }
+  slots.push({ who: chasingWho, runs: chaseSeg.runs, sessionsUsed: chaseUsed, unfinished: false });
+  totals[chasingWho] += chaseSeg.runs;
+  if (chaseSeg.runs >= target) {
+    return { slots, totals, result: chasingWho === "me" ? "WIN" : "LOSS", marginKind: "wickets", marginWickets: randInt(2, 8) };
+  }
+  const runsMargin = Math.max(1, target - chaseSeg.runs - 1);
+  return { slots, totals, result: settingWho === "me" ? "WIN" : "LOSS", marginKind: "runs", marginRuns: runsMargin };
+}
+
+function testMarginText(engineResult) {
+  const won = engineResult.result === "WIN";
+  if (engineResult.result === "DRAW") return "Match drawn";
+  if (engineResult.marginKind === "innings") return `${won ? "Won" : "Lost"} by an innings and ${engineResult.marginRuns} run${engineResult.marginRuns === 1 ? "" : "s"}`;
+  if (engineResult.marginKind === "wickets") return `${won ? "Won" : "Lost"} by ${engineResult.marginWickets} wicket${engineResult.marginWickets === 1 ? "" : "s"}`;
+  return `${won ? "Won" : "Lost"} by ${engineResult.marginRuns} run${engineResult.marginRuns === 1 ? "" : "s"}`;
+}
+
+// used when a Test/FC match is bulk/quick-simmed rather than live-played — a great individual
+// performance still gives the team a small nudge, same philosophy as teamWinProbability elsewhere
+function resolveTestFcResult(perf, oppStrength, myStrength) {
+  let contribution = 0;
+  if (perf.batted) contribution += perf.runs / 10;
+  if (perf.innings2) contribution += perf.innings2.runs / 10;
+  if (perf.bowled) contribution += perf.wickets * 1.8;
+  contribution = clamp(contribution, -2, 6);
+  return simulateTestMatchEngine(Math.random() < 0.5, myStrength + contribution, oppStrength);
+}
+
 function simulatePlayerPerformance(p, oppStrength, fmt) {
   const perf = {};
   const doesBat = p.role !== "Bowler" || Math.random() < 0.85;
@@ -837,20 +943,31 @@ function startSeason() {
   save();
 }
 
-function playDomesticMatch(precomputedPerf, precomputedTossNote) {
+function playDomesticMatch(precomputedPerf, precomputedTossNote, precomputedEngineResult) {
   const p = state;
   const fx = p.fixtures[p.matchIndex];
   const tossNote = precomputedPerf ? precomputedTossNote : tossNoteFor(window.__matchToss);
   const perf = precomputedPerf || simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
   if (!precomputedPerf) window.__matchToss = null;
-  const won = Math.random() < teamWinProbability(domesticTeamStrength(p), fx.oppStrength, perf);
-  fx.played = true; fx.won = won;
+  const longFmt = fx.fmt === "TEST" || fx.fmt === "FC";
+  let won, margin, result, engineResult = null;
+  if (longFmt) {
+    engineResult = precomputedEngineResult || resolveTestFcResult(perf, fx.oppStrength, domesticTeamStrength(p));
+    result = engineResult.result;
+    won = result === "WIN";
+    margin = testMarginText(engineResult);
+  } else {
+    won = Math.random() < teamWinProbability(domesticTeamStrength(p), fx.oppStrength, perf);
+    result = won ? "WIN" : "LOSS";
+    margin = matchMarginText(won, fx.fmt);
+  }
+  fx.played = true; fx.won = won; fx.result = result;
   addStat(p.seasonDomStats, perf); addStat(p.stats.domestic, perf);
   p.caps.domestic += 1;
-  p.lastMatchResult = { kind: "domestic", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tossNote };
+  p.lastMatchResult = { kind: "domestic", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, result, margin, perf, milestones: milestonesFor(perf), tossNote, engineResult };
   p.matchIndex += 1;
-  gainReputation(perf, won);
-  awardMatchEarnings("domestic", fx.fmt, perf, won);
+  gainReputation(perf, result);
+  awardMatchEarnings("domestic", fx.fmt, perf, result);
   if (p.matchIndex >= p.fixtures.length) finishDomesticSeason();
   save();
 }
@@ -860,12 +977,21 @@ function simRestOfDomesticSeason() {
   while (p.matchIndex < p.fixtures.length) {
     const fx = p.fixtures[p.matchIndex];
     const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
-    const won = Math.random() < teamWinProbability(domesticTeamStrength(p), fx.oppStrength, perf);
-    fx.played = true; fx.won = won;
+    const longFmt = fx.fmt === "TEST" || fx.fmt === "FC";
+    let won, result;
+    if (longFmt) {
+      const engineResult = resolveTestFcResult(perf, fx.oppStrength, domesticTeamStrength(p));
+      result = engineResult.result;
+      won = result === "WIN";
+    } else {
+      won = Math.random() < teamWinProbability(domesticTeamStrength(p), fx.oppStrength, perf);
+      result = won ? "WIN" : "LOSS";
+    }
+    fx.played = true; fx.won = won; fx.result = result;
     addStat(p.seasonDomStats, perf); addStat(p.stats.domestic, perf);
     p.caps.domestic += 1;
-    gainReputation(perf, won);
-    awardMatchEarnings("domestic", fx.fmt, perf, won);
+    gainReputation(perf, result);
+    awardMatchEarnings("domestic", fx.fmt, perf, result);
     p.matchIndex += 1;
   }
   p.lastMatchResult = null;
@@ -877,7 +1003,9 @@ function finishDomesticSeason() {
   const p = state;
   p.domesticDone = true;
   const wins = p.fixtures.filter(f => f.won).length;
-  const winRate = wins / p.fixtures.length;
+  const draws = p.fixtures.filter(f => f.result === "DRAW").length;
+  const decisive = p.fixtures.length - draws;
+  const winRate = decisive ? wins / decisive : 0;
   let finish;
   if (winRate > 0.75) finish = 1;
   else if (winRate > 0.6) finish = randInt(1, 3);
@@ -899,7 +1027,7 @@ function finishDomesticSeason() {
     p.awards.push({ season: p.season, name: award, icon: "⭐" });
     p.reputation = clamp(p.reputation + 8, 0, 100);
   }
-  p.lastLeagueFinish = { finish, champion, wins, losses: p.fixtures.length - wins };
+  p.lastLeagueFinish = { finish, champion, wins, draws, losses: p.fixtures.length - wins - draws };
   p.lastSeasonSummary = { stats: { ...s }, finish, champion, award };
 
   if (p.format === "ALL_ROUND") startFranchiseStint();
@@ -1222,21 +1350,32 @@ function applyKnockoutStakes(fx, won) {
   p.reputation = clamp(p.reputation + (isFinal ? 4 : 2) + (won ? (isFinal ? 4 : 2) : 0), 0, 100);
 }
 
-function playIntlMatch(precomputedPerf, precomputedTossNote) {
+function playIntlMatch(precomputedPerf, precomputedTossNote, precomputedEngineResult) {
   const p = state;
   const fx = p.intlFixtures[p.intlIndex];
   const tossNote = precomputedPerf ? precomputedTossNote : tossNoteFor(window.__matchToss);
   const perf = precomputedPerf || simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
   if (!precomputedPerf) window.__matchToss = null;
-  const won = Math.random() < teamWinProbability(intlTeamStrength(p), fx.oppStrength, perf);
-  fx.played = true; fx.won = won;
+  const longFmt = fx.fmt === "TEST" || fx.fmt === "FC";
+  let won, margin, result, engineResult = null;
+  if (longFmt) {
+    engineResult = precomputedEngineResult || resolveTestFcResult(perf, fx.oppStrength, intlTeamStrength(p));
+    result = engineResult.result;
+    won = result === "WIN";
+    margin = testMarginText(engineResult);
+  } else {
+    won = Math.random() < teamWinProbability(intlTeamStrength(p), fx.oppStrength, perf);
+    result = won ? "WIN" : "LOSS";
+    margin = matchMarginText(won, fx.fmt);
+  }
+  fx.played = true; fx.won = won; fx.result = result;
   addStat(p.seasonIntlStats, perf); addStat(p.stats.intl, perf);
   p.caps.intl += 1;
   p.formatCaps[fx.fmt] = (p.formatCaps[fx.fmt] || 0) + 1;
-  p.lastMatchResult = { kind: "intl", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, margin: matchMarginText(won, fx.fmt), perf, milestones: milestonesFor(perf), tag: fx.tag, tossNote, stage: fx.stage || null };
+  p.lastMatchResult = { kind: "intl", fmt: fx.fmt, opponent: fx.opponent, ground: fx.ground, won, result, margin, perf, milestones: milestonesFor(perf), tag: fx.tag, tossNote, stage: fx.stage || null, engineResult };
   p.intlIndex += 1;
-  gainReputation(perf, won);
-  awardMatchEarnings("intl", fx.fmt, perf, won);
+  gainReputation(perf, result);
+  awardMatchEarnings("intl", fx.fmt, perf, result);
   applyKnockoutStakes(fx, won);
   if (!fx.stage || fx.stage === "GROUP") updateTournamentTable(fx.opponent, won);
   if (p.intlIndex >= p.intlFixtures.length) advanceIntlWindow();
@@ -1248,13 +1387,22 @@ function simRestOfIntl() {
   while (p.intlIndex < p.intlFixtures.length) {
     const fx = p.intlFixtures[p.intlIndex];
     const perf = simulatePlayerPerformance(p, fx.oppStrength, fx.fmt);
-    const won = Math.random() < teamWinProbability(intlTeamStrength(p), fx.oppStrength, perf);
-    fx.played = true; fx.won = won;
+    const longFmt = fx.fmt === "TEST" || fx.fmt === "FC";
+    let won, result;
+    if (longFmt) {
+      const engineResult = resolveTestFcResult(perf, fx.oppStrength, intlTeamStrength(p));
+      result = engineResult.result;
+      won = result === "WIN";
+    } else {
+      won = Math.random() < teamWinProbability(intlTeamStrength(p), fx.oppStrength, perf);
+      result = won ? "WIN" : "LOSS";
+    }
+    fx.played = true; fx.won = won; fx.result = result;
     addStat(p.seasonIntlStats, perf); addStat(p.stats.intl, perf);
     p.caps.intl += 1;
     p.formatCaps[fx.fmt] = (p.formatCaps[fx.fmt] || 0) + 1;
-    gainReputation(perf, won);
-    awardMatchEarnings("intl", fx.fmt, perf, won);
+    gainReputation(perf, result);
+    awardMatchEarnings("intl", fx.fmt, perf, result);
     applyKnockoutStakes(fx, won);
     if (!fx.stage || fx.stage === "GROUP") updateTournamentTable(fx.opponent, won);
     p.intlIndex += 1;
@@ -1270,15 +1418,16 @@ function finishInternationalWindow() {
   const s = p.seasonIntlStats;
   const wins = p.intlFixtures.filter(f => f.won).length;
   let trophy = null, finishTag = null;
-  const nationStrength = NATION_STRENGTH[p.country];
 
   if (p.bigEvent.active) {
     const captainNote = p.isNationalCaptain ? " (as captain)" : "";
     if (p.bigEvent.kind === "FINAL") {
-      const strength = (p.bat + p.bowl) * 0.5 * 0.3 + nationStrength * 0.7 + (p.isNationalCaptain ? 6 : 0);
-      const won1 = Math.random() < clamp(0.06 + strength / 260, 0.04, 0.6);
-      finishTag = won1 ? "Champions" : "Runners-up";
-      if (won1) trophy = { season: p.season, name: `${p.bigEvent.name} — Champions (${p.country})${captainNote}`, icon: "🏆" };
+      // the final was a real match you just played — report what actually happened, no separate dice roll
+      const finalFx = p.intlFixtures[p.intlFixtures.length - 1];
+      if (finalFx.result === "WIN") finishTag = "Champions";
+      else if (finalFx.result === "DRAW") finishTag = "Final drawn — no champion crowned";
+      else finishTag = "Runners-up";
+      if (finishTag === "Champions") trophy = { season: p.season, name: `${p.bigEvent.name} — Champions (${p.country})${captainNote}`, icon: "🏆" };
     } else {
       // the group table decided qualification, and any semi-final/final were real matches you actually played —
       // the finish tag just reports what already happened, no extra dice roll needed
@@ -1307,9 +1456,10 @@ function finishInternationalWindow() {
   save();
 }
 
-function gainReputation(perf, won) {
+function gainReputation(perf, resultOrWon) {
   const p = state;
-  let delta = won ? 0.4 : -0.1;
+  const result = normalizeResult(resultOrWon);
+  let delta = result === "WIN" ? 0.4 : result === "DRAW" ? 0.1 : -0.1;
   const innScores = [];
   if (perf.batted) innScores.push(perf.runs);
   if (perf.innings2) innScores.push(perf.innings2.runs);
@@ -2124,6 +2274,159 @@ function renderLiveBowling() {
   `);
 }
 
+// adds this slot's team runs into the running totals and decides whether the match is over —
+// shared by the interactive path (once your personal involvement in a slot ends) and quick-sim
+function finalizeCurrentTestSlot(li) {
+  const slot = li.slot;
+  li.totals[slot.who] += slot.teamRuns;
+  li.sessionsLeft -= slot.sessionBudget;
+  if (slot.timeUp) return { done: true, result: "DRAW" };
+  if (slot.isChase) {
+    const won = slot.teamRuns >= slot.target;
+    if (won) return { done: true, result: slot.who === "me" ? "WIN" : "LOSS", marginKind: "wickets", marginWickets: randInt(2, 8) };
+    const runsMargin = Math.max(1, slot.target - slot.teamRuns - 1);
+    return { done: true, result: li.order[0] === "me" ? "WIN" : "LOSS", marginKind: "runs", marginRuns: runsMargin };
+  }
+  li.slotIndex++;
+  return { done: false };
+}
+
+// which day/session (0=Morning,1=Afternoon,2=Evening) a given number of sessions-already-used falls on
+function dayOfSession(sessionsUsedSoFar) {
+  const sessionNumber = sessionsUsedSoFar + 1;
+  const day = Math.ceil(sessionNumber / SESSIONS_PER_DAY);
+  const sessionInDay = (sessionNumber - 1) % SESSIONS_PER_DAY;
+  return { day, sessionInDay };
+}
+
+function renderLiveTestBatting() {
+  const li = window.__liveTest;
+  const p = state;
+  applyCurrentTheme(p);
+  const slot = li.slot;
+  const secondInnings = li.personalBattingSlotsCompleted >= 1;
+  if (slot.revealing) {
+    // phaseInSlot was already incremented for the session that just finished — label that one, not the next
+    const doneSessionsUsedSoFar = TEST_MATCH_SESSIONS - li.sessionsLeft + slot.phaseInSlot - 1;
+    const done = dayOfSession(doneSessionsUsedSoFar);
+    const doneName = battingPhaseName(li.fx.fmt, done.sessionInDay);
+    const seg = li.lastBatSeg;
+    screen(`
+      ${masthead()}
+      <div class="card">
+        <div class="section-title" style="text-align:center;">Day ${done.day} · ${doneName}${secondInnings ? " · 2nd innings" : ""}</div>
+        <div class="result-figures">
+          <div class="big">${seg.out ? `${seg.runs}(${seg.balls})` : `+${seg.runs}(${seg.balls})`}</div>
+          <div class="sub">${seg.out ? "OUT!" : `${seg.fours}x4, ${seg.sixes}x6`}</div>
+        </div>
+        ${seg.out
+          ? `<div class="badge" style="display:block;text-align:center;width:fit-content;margin:6px auto 0;background:rgba(232,93,117,0.15);color:var(--accent-3);">Your innings ends there</div>`
+          : li.personalDoneThisSlot ? `<div class="badge" style="display:block;text-align:center;width:fit-content;margin:6px auto 0;background:rgba(95,217,122,0.15);color:var(--accent);">Innings wraps up — you finish unbeaten</div>` : ""}
+      </div>
+      <div class="card">
+        <div class="section-title">Innings so far</div>
+        <div class="stat-grid" style="margin-top:8px;">
+          ${ratingBar("Runs", li.personalBat.runs)}
+          ${ratingBar("Balls", li.personalBat.balls)}
+          ${ratingBar("Boundaries", `${li.personalBat.fours}×4 ${li.personalBat.sixes}×6`)}
+        </div>
+      </div>
+      <button class="primary" onclick="App.continueLiveTestInnings()">Continue</button>
+    `);
+    return;
+  }
+  const sessionsUsedSoFar = TEST_MATCH_SESSIONS - li.sessionsLeft + slot.phaseInSlot;
+  const { day, sessionInDay } = dayOfSession(sessionsUsedSoFar);
+  const sessionName = battingPhaseName(li.fx.fmt, sessionInDay);
+  screen(`
+    ${masthead()}
+    <div class="card">
+      <div class="section-title" style="text-align:center;">Batting — Day ${day} · ${sessionName} vs ${li.fx.opponent}</div>
+      <div class="empty-note" style="padding:4px 0 0;">${slot.phaseInSlot === 0 ? (secondInnings ? "You're at the crease again for the 2nd innings." : "You're at the crease.") : `${li.personalBat.runs} off ${li.personalBat.balls} so far.`}</div>
+    </div>
+    <div class="card">
+      <div class="section-title">How do you play the ${sessionName.toLowerCase()}?</div>
+      <div class="stack" style="margin-top:8px;">
+        ${Object.keys(BATTING_APPROACHES).map(k => `
+          <button class="secondary" onclick="App.chooseTestBattingPhase('${k}')">${k === "Cautious" ? "🛡️" : k === "Aggressive" ? "💥" : "🔄"} ${k} — ${BATTING_APPROACHES[k].desc}</button>
+        `).join("")}
+      </div>
+    </div>
+    <button class="secondary" onclick="App.quickSimTestMatch()">⏩ Simulate rest of match</button>
+  `);
+}
+
+function renderLiveTestBowling() {
+  const li = window.__liveTest;
+  const p = state;
+  applyCurrentTheme(p);
+  const slot = li.slot;
+  if (slot.revealing) {
+    const seg = li.lastBowlSeg;
+    screen(`
+      ${masthead()}
+      <div class="card">
+        <div class="section-title" style="text-align:center;">Bowling — Spell ${slot.spellIndexInSlot}</div>
+        <div class="result-figures">
+          <div class="big">${seg.wickets}/${seg.runsConceded}</div>
+          <div class="sub">${seg.overs} over${seg.overs === 1 ? "" : "s"}</div>
+        </div>
+        ${li.personalDoneThisSlot ? `<div class="badge" style="display:block;text-align:center;width:fit-content;margin:6px auto 0;background:rgba(95,217,122,0.15);color:var(--accent);">That's your lot with the ball this innings</div>` : ""}
+      </div>
+      <div class="card">
+        <div class="section-title">Figures this innings</div>
+        <div class="stat-grid" style="margin-top:8px;">
+          ${ratingBar("Overs", li.personalBowl.overs)}
+          ${ratingBar("Wickets", li.personalBowl.wickets)}
+          ${ratingBar("Runs", li.personalBowl.runsConceded)}
+        </div>
+      </div>
+      <button class="primary" onclick="App.continueLiveTestInnings()">Continue</button>
+    `);
+    return;
+  }
+  screen(`
+    ${masthead()}
+    <div class="card">
+      <div class="section-title" style="text-align:center;">Bowling — Spell ${slot.spellIndexInSlot + 1} vs ${li.fx.opponent}</div>
+      <div class="empty-note" style="padding:4px 0 0;">${slot.spellIndexInSlot === 0 ? "You've got the ball." : `${li.personalBowl.wickets}/${li.personalBowl.runsConceded} from ${li.personalBowl.overs} so far.`}</div>
+    </div>
+    <div class="card">
+      <div class="section-title">How do you bowl this spell?</div>
+      <div class="stack" style="margin-top:8px;">
+        ${Object.keys(BOWLING_APPROACHES).map(k => `
+          <button class="secondary" onclick="App.chooseTestBowlingPhase('${k}')">${k === "Contain" ? "🔒" : k === "Attack" ? "🎯" : "🔁"} ${k} — ${BOWLING_APPROACHES[k].desc}</button>
+        `).join("")}
+      </div>
+    </div>
+    <button class="secondary" onclick="App.quickSimTestMatch()">⏩ Simulate rest of match</button>
+  `);
+}
+
+function renderNotInvolved() {
+  const li = window.__liveTest;
+  const p = state;
+  applyCurrentTheme(p);
+  const slot = li.slot;
+  const isOwnBatting = slot.who === "me";
+  const reason = slot.skippedTestBowling
+    ? "🎽 The captain barely turned to you today — a quiet one with the ball."
+    : isOwnBatting
+      ? "You're not needed at the crease this innings — the top order is seeing it through."
+      : "You're not part of the bowling attack this innings.";
+  screen(`
+    ${masthead()}
+    <div class="card">
+      <div class="section-title" style="text-align:center;">${isOwnBatting ? "Your team is batting" : `${li.fx.opponent} are batting`}</div>
+      <div class="empty-note" style="padding:6px 0;">${reason}</div>
+    </div>
+    <div class="card stack">
+      <button class="primary" onclick="App.simulateToNextInvolvement()">⏩ Simulate till your next play</button>
+      <button class="secondary" onclick="App.quickSimTestMatch()">⏭️ Simulate rest of match</button>
+    </div>
+  `);
+}
+
 /* ================= screens: hub ================= */
 
 function renderHub() {
@@ -2219,7 +2522,7 @@ function renderHubOverview() {
           ${played.map(f => `
             <div class="match-line">
               <span class="opp">vs ${f.opponent}</span>
-              <span class="res ${f.won ? "win" : "loss"}">${f.won ? "WON" : "LOST"}</span>
+              <span class="res ${f.result === "DRAW" ? "pending" : f.won ? "win" : "loss"}">${f.result === "DRAW" ? "DRAW" : f.won ? "WON" : "LOST"}</span>
             </div>
           `).join("")}
         </div>
@@ -2573,7 +2876,7 @@ function renderMatchResult() {
         <div class="big">${figureBig}</div>
         <div class="sub">${figureSub}</div>
       </div>
-      <div class="badge" style="display:block;text-align:center;width:fit-content;margin:6px auto 0;background:${r.won ? "rgba(95,217,122,0.15)" : "rgba(232,93,117,0.15)"};color:${r.won ? "var(--accent)" : "var(--accent-3)"};">
+      <div class="badge" style="display:block;text-align:center;width:fit-content;margin:6px auto 0;background:${r.result === "DRAW" ? "rgba(242,193,78,0.15)" : r.won ? "rgba(95,217,122,0.15)" : "rgba(232,93,117,0.15)"};color:${r.result === "DRAW" ? "var(--accent-2)" : r.won ? "var(--accent)" : "var(--accent-3)"};">
         ${r.margin || (r.won ? "Won" : "Lost")}
       </div>
     </div>
@@ -2598,7 +2901,7 @@ function renderSeasonSummary() {
     <div class="hero" style="padding-top:6px;">
       <div class="mode-tag">Season ${p.season} · ${label} recap</div>
       <h1>${p.team}</h1>
-      <p>${lf.wins}-${lf.losses} record · finished ${ordinal(lf.finish)}${lf.champion ? " — 🏆 Champions!" : ""}</p>
+      <p>${lf.wins}-${lf.losses}${lf.draws ? `-${lf.draws}` : ""} record · finished ${ordinal(lf.finish)}${lf.champion ? " — 🏆 Champions!" : ""}</p>
     </div>
     <div class="card">
       <div class="section-title">Your season</div>
@@ -3196,17 +3499,15 @@ const App = {
     const p = state;
     const fx = currentFixtureFor(kind);
     if (!fx) return renderHub();
+    if (fx.fmt === "TEST" || fx.fmt === "FC") return App.startLiveTestMatch(kind, fx);
     const doesBat = p.role !== "Bowler" || Math.random() < 0.85;
     const doesBowl = p.role === "Bowler" || p.role === "All-rounder";
-    const longFmt = fx.fmt === "TEST" || fx.fmt === "FC";
-    // Tests have no guaranteed bowling allocation — sometimes the captain barely turns to you
-    const skippedTestBowling = doesBowl && longFmt && Math.random() < 0.12;
     window.__live = {
       kind, fx, cond: matchConditionsFor(p),
-      doesBat, doesBowl, skippedTestBowling,
+      doesBat, doesBowl, skippedTestBowling: false,
       battingPhase: 0, bowlingSpellIndex: 0,
       battingInningsNum: 1, bat1: null, pendingSecondInnings: false,
-      battingDone: !doesBat, bowlingDone: !doesBowl || skippedTestBowling,
+      battingDone: !doesBat, bowlingDone: !doesBowl,
       bat: { runs: 0, balls: 0, fours: 0, sixes: 0, out: false },
       bowl: { overs: 0, wickets: 0, runsConceded: 0 },
       tossNote: tossNoteFor(window.__matchToss),
@@ -3245,10 +3546,6 @@ const App = {
     if (seg.out || li.battingPhase >= LIVE_PHASES) {
       li.bat.out = seg.out;
       li.battingDone = true;
-      const longFmt = li.fx.fmt === "TEST" || li.fx.fmt === "FC";
-      if (longFmt && !li.bat1 && li.battingInningsNum === 1) {
-        li.pendingSecondInnings = Math.random() < SECOND_INNINGS_CHANCE;
-      }
     }
     li.revealing = true;
     state.battingApproach = k; save();
@@ -3258,7 +3555,6 @@ const App = {
     const p = state;
     const li = window.__live;
     const fmt = li.fx.fmt;
-    const longFmt = fmt === "TEST" || fmt === "FC";
     const cap = bowlingOversCap(fmt);
     const overs = Math.max(1, Math.min(bowlingSpellOvers(fmt), cap - li.bowl.overs));
     const effRating = p.bowl * li.cond.bowlMult + perkBowlBonus(k);
@@ -3266,11 +3562,7 @@ const App = {
     li.bowl.overs += seg.overs; li.bowl.wickets += seg.wickets; li.bowl.runsConceded += seg.runsConceded;
     li.bowlingSpellIndex++;
     li.lastBowlSeg = seg;
-    if (longFmt) {
-      if (li.bowl.overs >= cap || !testSpellContinues(li.bowlingSpellIndex - 1)) li.bowlingDone = true;
-    } else if (li.bowl.overs >= cap) {
-      li.bowlingDone = true;
-    }
+    if (li.bowl.overs >= cap) li.bowlingDone = true;
     li.revealing = true;
     state.bowlingApproach = k; save();
     renderLiveBowling();
@@ -3282,16 +3574,12 @@ const App = {
     const battingApproach = p.battingApproach || "Balanced";
     const bowlingApproach = p.bowlingApproach || "Balanced";
     const liveBatRating = (p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult + perkBatBonus(battingApproach);
-    if (li.doesBat && !li.bat.out && li.battingPhase === 0 && !li.bat1) {
+    if (li.doesBat && !li.bat.out && li.battingPhase === 0) {
       Object.assign(perf, simulateBatting(liveBatRating, li.fx.oppStrength, li.fx.fmt, battingApproach));
-    } else if (li.doesBat && li.bat1 && li.battingPhase === 0 && !li.bat.out && li.bat.balls === 0) {
-      // 1st innings already fully played, 2nd innings not yet started live — simulate it in full
-      const inn2 = simulateBattingInnings(liveBatRating, li.fx.oppStrength, li.fx.fmt, battingApproach);
-      Object.assign(perf, { batted: true, runs: li.bat1.runs, balls: Math.max(li.bat1.balls, 1), fours: li.bat1.fours, sixes: li.bat1.sixes, out: li.bat1.out, innings2: inn2 });
     } else if (li.doesBat) {
       Object.assign(perf, finalBattingPerf(li));
     }
-    if (li.doesBowl && !li.skippedTestBowling && li.bowlingSpellIndex === 0) {
+    if (li.doesBowl && li.bowlingSpellIndex === 0) {
       Object.assign(perf, simulateBowling(p.bowl * li.cond.bowlMult + perkBowlBonus(bowlingApproach), li.fx.oppStrength, li.fx.fmt, bowlingApproach));
     } else if (li.doesBowl) {
       perf.bowled = true; perf.overs = li.bowl.overs; perf.wickets = li.bowl.wickets; perf.runsConceded = li.bowl.runsConceded;
@@ -3314,6 +3602,163 @@ const App = {
     else if (li.kind === "overseas") playOverseasMatch(perf, note);
     else playIntlMatch(perf, note);
     window.__live = null;
+    renderMatchResult();
+  },
+
+  /* ===== Test/FC live match — real 5-day, up-to-4-innings play ===== */
+  startLiveTestMatch(kind, fx) {
+    const p = state;
+    const cond = matchConditionsFor(p);
+    const myStrength = kind === "intl" ? intlTeamStrength(p) : kind === "franchise" ? franchiseTeamStrength(p) : domesticTeamStrength(p);
+    const doesBat = p.role !== "Bowler" || Math.random() < 0.85;
+    const doesBowl = p.role === "Bowler" || p.role === "All-rounder";
+    const toss = window.__matchToss;
+    const meBatsFirst = toss ? toss.decision === "BAT" : Math.random() < 0.5;
+    window.__liveTest = {
+      kind, fx, cond, myStrength, oppStrength: fx.oppStrength,
+      doesBat, doesBowl,
+      order: meBatsFirst ? ["me", "opp"] : ["opp", "me"],
+      slotIndex: 0,
+      totals: { me: 0, opp: 0 },
+      sessionsLeft: TEST_MATCH_SESSIONS,
+      tossNote: tossNoteFor(toss),
+      personalBat: { runs: 0, balls: 0, fours: 0, sixes: 0, out: false },
+      personalBat1: null,
+      personalBattingSlotsCompleted: 0,
+      personalBowl: { overs: 0, wickets: 0, runsConceded: 0 },
+      personalBowled: false,
+      quickSimming: false,
+      slot: null,
+    };
+    window.__matchToss = null;
+    App.beginNextTestSlot();
+  },
+  beginNextTestSlot() {
+    const li = window.__liveTest;
+    while (true) {
+      if (li.sessionsLeft <= 0) return App.endTestMatch("DRAW");
+      if (li.slotIndex === 2) {
+        const firstWho = li.order[0], secondWho = li.order[1];
+        const lead = li.totals[firstWho] - li.totals[secondWho];
+        const leaderWho = lead >= 0 ? firstWho : secondWho;
+        const absLead = Math.abs(lead);
+        if (absLead >= 190 && Math.random() < clamp(0.15 + absLead / 480, 0.15, 0.7)) {
+          return App.endTestMatch(leaderWho === "me" ? "WIN" : "LOSS", { marginKind: "innings", marginRuns: absLead });
+        }
+      }
+      const who = li.order[li.slotIndex % 2];
+      const isChase = li.slotIndex === 3;
+      const batStrength = who === "me" ? li.myStrength : li.oppStrength;
+      const bowlStrength = who === "me" ? li.oppStrength : li.myStrength;
+      const seg = simulateInningsTotal(batStrength, bowlStrength);
+      const used = Math.min(seg.sessionsUsed, li.sessionsLeft);
+      const timeUp = used < seg.sessionsUsed;
+      const teamRuns = timeUp ? Math.max(0, Math.round(seg.runs * (used / seg.sessionsUsed))) : seg.runs;
+      const target = isChase ? (li.totals[li.order[0]] - li.totals[li.order[1]] + 1) : null;
+      const wantsIn = who === "me" ? li.doesBat : li.doesBowl;
+      const involved = !li.quickSimming && wantsIn;
+      const skippedTestBowling = who === "opp" && involved && Math.random() < 0.12;
+
+      li.slot = {
+        who, teamRuns, sessionBudget: used, timeUp, isChase, target,
+        involved: involved && !skippedTestBowling, skippedTestBowling,
+        phaseInSlot: 0, spellIndexInSlot: 0, revealing: false,
+      };
+
+      if (!li.slot.involved) {
+        if (!li.quickSimming) return renderNotInvolved();
+        const outcome = finalizeCurrentTestSlot(li);
+        if (outcome.done) return App.endTestMatch(outcome.result, outcome);
+        continue;
+      }
+      if (who === "me") return renderLiveTestBatting();
+      return renderLiveTestBowling();
+    }
+  },
+  resolveTestSlotEnd() {
+    const li = window.__liveTest;
+    const slot = li.slot;
+    if (slot.who === "me" && slot.involved && li.doesBat) {
+      li.personalBattingSlotsCompleted += 1;
+      if (li.personalBattingSlotsCompleted === 1) {
+        li.personalBat1 = { ...li.personalBat };
+        li.personalBat = { runs: 0, balls: 0, fours: 0, sixes: 0, out: false };
+      }
+    }
+    const outcome = finalizeCurrentTestSlot(li);
+    if (outcome.done) return App.endTestMatch(outcome.result, outcome);
+    App.beginNextTestSlot();
+  },
+  simulateToNextInvolvement() { App.resolveTestSlotEnd(); },
+  quickSimTestMatch() {
+    const li = window.__liveTest;
+    li.quickSimming = true;
+    if (li.slot && li.slot.involved) return App.resolveTestSlotEnd();
+    App.beginNextTestSlot();
+  },
+  chooseTestBattingPhase(k) {
+    const p = state;
+    const li = window.__liveTest;
+    const slot = li.slot;
+    const effRating = (p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult + perkBatBonus(k);
+    const seg = simulateBattingPhase(effRating, li.oppStrength, li.fx.fmt, k);
+    li.personalBat.runs += seg.runs; li.personalBat.balls += seg.balls; li.personalBat.fours += seg.fours; li.personalBat.sixes += seg.sixes;
+    slot.phaseInSlot++;
+    li.lastBatSeg = seg;
+    if (seg.out) li.personalBat.out = true;
+    li.personalDoneThisSlot = seg.out || slot.phaseInSlot >= slot.sessionBudget;
+    slot.revealing = true;
+    state.battingApproach = k; save();
+    renderLiveTestBatting();
+  },
+  chooseTestBowlingPhase(k) {
+    const p = state;
+    const li = window.__liveTest;
+    const slot = li.slot;
+    const fmt = li.fx.fmt;
+    const cap = bowlingOversCap(fmt);
+    const overs = Math.max(1, Math.min(bowlingSpellOvers(fmt), cap - li.personalBowl.overs));
+    const effRating = p.bowl * li.cond.bowlMult + perkBowlBonus(k);
+    const seg = simulateBowlingSpell(effRating, li.oppStrength, fmt, k, overs);
+    li.personalBowl.overs += seg.overs; li.personalBowl.wickets += seg.wickets; li.personalBowl.runsConceded += seg.runsConceded;
+    li.personalBowled = true;
+    slot.spellIndexInSlot++;
+    li.lastBowlSeg = seg;
+    const continues = testSpellContinues(slot.spellIndexInSlot - 1) && li.personalBowl.overs < cap;
+    li.personalDoneThisSlot = !continues;
+    slot.revealing = true;
+    state.bowlingApproach = k; save();
+    renderLiveTestBowling();
+  },
+  continueLiveTestInnings() {
+    const li = window.__liveTest;
+    const slot = li.slot;
+    slot.revealing = false;
+    if (li.personalDoneThisSlot) {
+      li.personalDoneThisSlot = false;
+      return App.resolveTestSlotEnd();
+    }
+    if (slot.who === "me") return renderLiveTestBatting();
+    return renderLiveTestBowling();
+  },
+  endTestMatch(result, marginInfo) {
+    const li = window.__liveTest;
+    const engineResult = Object.assign({ result, totals: li.totals }, marginInfo || {});
+    const perf = {};
+    if (li.personalBattingSlotsCompleted === 1) {
+      Object.assign(perf, { batted: true, runs: li.personalBat1.runs, balls: Math.max(li.personalBat1.balls, 1), fours: li.personalBat1.fours, sixes: li.personalBat1.sixes, out: li.personalBat1.out });
+    } else if (li.personalBattingSlotsCompleted >= 2) {
+      Object.assign(perf, {
+        batted: true, runs: li.personalBat1.runs, balls: Math.max(li.personalBat1.balls, 1), fours: li.personalBat1.fours, sixes: li.personalBat1.sixes, out: li.personalBat1.out,
+        innings2: { runs: li.personalBat.runs, balls: Math.max(li.personalBat.balls, 1), fours: li.personalBat.fours, sixes: li.personalBat.sixes, out: li.personalBat.out },
+      });
+    }
+    if (li.personalBowled) Object.assign(perf, { bowled: true, overs: li.personalBowl.overs, wickets: li.personalBowl.wickets, runsConceded: li.personalBowl.runsConceded });
+    const note = li.tossNote;
+    const kind = li.kind;
+    window.__liveTest = null;
+    if (kind === "intl") playIntlMatch(perf, note, engineResult);
+    else playDomesticMatch(perf, note, engineResult);
     renderMatchResult();
   },
 
