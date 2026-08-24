@@ -604,6 +604,20 @@ function tossNoteFor(toss) {
   return correct ? "📖 Good toss call — the conditions suited it." : "📖 Tricky call — the conditions didn't really favour that.";
 }
 
+// the toss call is the captain's — you only get a say in it if you actually wear the armband for this side
+function isCaptainForKind(kind) {
+  const p = state;
+  if (kind === "intl") return !!p.isNationalCaptain;
+  if (kind === "domestic") return !!p.isDomesticCaptain;
+  return false; // franchise / overseas stints — you're a guest, never the captain
+}
+
+// a reasonably competent NPC captain reads the pitch correctly more often than not
+function autoTossDecision(pitch) {
+  if (!pitch.rightCall) return choice(["BAT", "BOWL"]);
+  return Math.random() < 0.75 ? pitch.rightCall : (pitch.rightCall === "BAT" ? "BOWL" : "BAT");
+}
+
 function simulatePlayerPerformance(p, oppStrength, fmt) {
   const perf = {};
   const doesBat = p.role !== "Bowler" || Math.random() < 0.85;
@@ -1987,12 +2001,14 @@ function renderMatchSetup(kind) {
       </div>
       <div class="card">
         <div class="section-title">Toss</div>
-        ${toss.wonToss ? `
-          <div class="empty-note" style="padding:6px 0 8px;text-align:left;">You won the toss — what's the call?</div>
+        ${toss.wonToss && toss.isCaptainChoice ? `
+          <div class="empty-note" style="padding:6px 0 8px;text-align:left;">You won the toss — as captain, what's the call?</div>
           <div class="option-grid">
             <div class="pill-btn ${toss.decision === "BAT" ? "selected" : ""}" onclick="App.setTossDecision('BAT')">🏏 Bat first</div>
             <div class="pill-btn ${toss.decision === "BOWL" ? "selected" : ""}" onclick="App.setTossDecision('BOWL')">🎯 Bowl first</div>
           </div>
+        ` : toss.wonToss ? `
+          <div class="empty-note" style="padding:6px 0;text-align:left;">You won the toss — the captain's called it, and you're ${toss.decision === "BAT" ? "batting" : "bowling"} first.</div>
         ` : `
           <div class="empty-note" style="padding:6px 0;text-align:left;">${fx.opponent} won the toss and chose to ${toss.oppDecision === "BAT" ? "bat" : "bowl"} first.</div>
         `}
@@ -3150,7 +3166,12 @@ const App = {
     if (!window.__matchToss) {
       const pitch = choice(PITCH_TYPES);
       const wonToss = Math.random() < 0.5;
-      window.__matchToss = { pitch, wonToss, decision: null, oppDecision: wonToss ? null : choice(["BAT", "BOWL"]) };
+      const isCaptainChoice = wonToss && isCaptainForKind(kind);
+      window.__matchToss = {
+        pitch, wonToss, isCaptainChoice,
+        decision: wonToss && !isCaptainChoice ? autoTossDecision(pitch) : null,
+        oppDecision: wonToss ? null : choice(["BAT", "BOWL"]),
+      };
     }
     renderMatchSetup(kind);
   },
