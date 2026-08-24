@@ -21,6 +21,56 @@ const NATION_STRENGTH = {
   "Pakistan": 78, "Sri Lanka": 68, "West Indies": 65, "Bangladesh": 60, "Afghanistan": 55,
 };
 
+// real-world all-time international career leaders — a career total that cracks either list gets
+// slotted in against the greats of the game, same as it would on ESPNcricinfo
+const ALL_TIME_BATTING_LEADERS = [
+  { name: "SR Tendulkar", country: "India", mat: 664, runs: 34357, ave: 48.52, hs: "248*", hundreds: 100 },
+  { name: "V Kohli", country: "India", mat: 562, runs: 28359, ave: 52.71, hs: "254*", hundreds: 85 },
+  { name: "KC Sangakkara", country: "Sri Lanka", mat: 594, runs: 28016, ave: 46.77, hs: "319", hundreds: 63 },
+  { name: "RT Ponting", country: "Australia", mat: 560, runs: 27483, ave: 45.95, hs: "257", hundreds: 71 },
+  { name: "DPMD Jayawardene", country: "Sri Lanka", mat: 652, runs: 25957, ave: 39.15, hs: "374", hundreds: 54 },
+  { name: "JH Kallis", country: "South Africa", mat: 519, runs: 25534, ave: 49.1, hs: "224", hundreds: 62 },
+  { name: "R Dravid", country: "India", mat: 509, runs: 24208, ave: 45.41, hs: "270", hundreds: 48 },
+  { name: "JE Root", country: "England", mat: 391, runs: 22899, ave: 49.99, hs: "262", hundreds: 61 },
+  { name: "BC Lara", country: "West Indies", mat: 430, runs: 22358, ave: 46.28, hs: "400*", hundreds: 53 },
+  { name: "ST Jayasuriya", country: "Sri Lanka", mat: 586, runs: 21032, ave: 34.14, hs: "340", hundreds: 42 },
+  { name: "S Chanderpaul", country: "West Indies", mat: 454, runs: 20988, ave: 45.72, hs: "203*", hundreds: 41 },
+  { name: "Inzamam-ul-Haq", country: "Pakistan", mat: 499, runs: 20580, ave: 43.32, hs: "329", hundreds: 35 },
+  { name: "RG Sharma", country: "India", mat: 514, runs: 20427, ave: 42.46, hs: "264", hundreds: 51 },
+  { name: "AB de Villiers", country: "South Africa", mat: 420, runs: 20014, ave: 48.11, hs: "278*", hundreds: 47 },
+  { name: "CH Gayle", country: "West Indies", mat: 483, runs: 19593, ave: 37.97, hs: "333", hundreds: 42 },
+  { name: "KS Williamson", country: "New Zealand", mat: 378, runs: 19346, ave: 48.12, hs: "251", hundreds: 48 },
+  { name: "DA Warner", country: "Australia", mat: 383, runs: 18995, ave: 42.39, hs: "335*", hundreds: 49 },
+  { name: "HM Amla", country: "South Africa", mat: 349, runs: 18672, ave: 46.56, hs: "311*", hundreds: 55 },
+  { name: "SC Ganguly", country: "India", mat: 424, runs: 18575, ave: 41.46, hs: "239", hundreds: 38 },
+  { name: "SR Waugh", country: "Australia", mat: 493, runs: 18496, ave: 41.65, hs: "200", hundreds: 35 },
+  { name: "LRPL Taylor", country: "New Zealand", mat: 454, runs: 18244, ave: 42.62, hs: "290", hundreds: 40 },
+  { name: "SPD Smith", country: "Australia", mat: 362, runs: 17814, ave: 47.75, hs: "239", hundreds: 49 },
+];
+const ALL_TIME_BOWLING_LEADERS = [
+  { name: "M Muralidaran", country: "Sri Lanka", mat: 495, wickets: 1347, ave: 22.86, best: "9/51" },
+  { name: "SK Warne", country: "Australia", mat: 339, wickets: 1001, ave: 25.51, best: "8/71" },
+  { name: "JM Anderson", country: "England", mat: 401, wickets: 991, ave: 27.28, best: "7/42" },
+  { name: "A Kumble", country: "India", mat: 403, wickets: 956, ave: 30.09, best: "10/74" },
+  { name: "GD McGrath", country: "Australia", mat: 376, wickets: 949, ave: 21.76, best: "8/24" },
+  { name: "Wasim Akram", country: "Pakistan", mat: 460, wickets: 916, ave: 23.57, best: "7/119" },
+  { name: "SCJ Broad", country: "England", mat: 344, wickets: 847, ave: 27.83, best: "8/15" },
+  { name: "SM Pollock", country: "South Africa", mat: 423, wickets: 829, ave: 23.73, best: "7/87" },
+  { name: "Waqar Younis", country: "Pakistan", mat: 349, wickets: 789, ave: 23.7, best: "7/36" },
+  { name: "TG Southee", country: "New Zealand", mat: 394, wickets: 776, ave: 29.57, best: "7/33" },
+  { name: "MA Starc", country: "Australia", mat: 302, wickets: 771, ave: 25.07, best: "7/58" },
+  { name: "R Ashwin", country: "India", mat: 287, wickets: 765, ave: 25.8, best: "7/59" },
+  { name: "WPUJC Vaas", country: "Sri Lanka", mat: 439, wickets: 761, ave: 28.44, best: "8/19" },
+  { name: "CA Walsh", country: "West Indies", mat: 337, wickets: 746, ave: 26.28, best: "7/37" },
+  { name: "B Lee", country: "Australia", mat: 322, wickets: 718, ave: 26.66, best: "5/22" },
+  { name: "Shakib Al Hasan", country: "Bangladesh", mat: 447, wickets: 712, ave: 28.48, best: "7/36" },
+  { name: "Harbhajan Singh", country: "India", mat: 367, wickets: 711, ave: 32.54, best: "8/84" },
+  { name: "DL Vettori", country: "New Zealand", mat: 442, wickets: 705, ave: 32.42, best: "7/87" },
+  { name: "DW Steyn", country: "South Africa", mat: 265, wickets: 699, ave: 23.37, best: "7/51" },
+  { name: "Kapil Dev", country: "India", mat: 356, wickets: 687, ave: 28.83, best: "9/83" },
+  { name: "M Ntini", country: "South Africa", mat: 284, wickets: 662, ave: 27.33, best: "7/37" },
+];
+
 // brand colour per board — used to re-theme the whole app on selection
 // accents are tuned to stay clearly visible as text/borders/icons on a near-black background —
 // several board colours (navy, maroon, dark green) were too close to black to read at their real shade
@@ -2432,8 +2482,8 @@ function renderNotInvolved() {
 function renderHub() {
   const p = state;
   applyCurrentTheme(p);
-  const tabs = ["Overview", "Career", "Shop"];
-  const mainBody = p.hubTab === "Career" ? renderHubCareer() : p.hubTab === "Shop" ? renderHubShop() : renderHubOverview();
+  const tabs = ["Overview", "Career", "Shop", "Leaders"];
+  const mainBody = p.hubTab === "Career" ? renderHubCareer() : p.hubTab === "Shop" ? renderHubShop() : p.hubTab === "Leaders" ? renderHubLeaders() : renderHubOverview();
 
   screen(`
     ${masthead(`<button class="link-btn" onclick="App.goFeedback()">💬 Feedback</button>`)}
@@ -2754,6 +2804,86 @@ function renderHubShop() {
       </div>
     `;
     }).join("")}
+  `;
+}
+
+// merges the real all-time leaders with the player's own international career, sorted, top-N only —
+// crack the board and a real great quietly drops off the bottom, same as it would in real life
+function battingLeaderboardRows(p) {
+  const rows = ALL_TIME_BATTING_LEADERS.map(r => ({ ...r, isPlayer: false }));
+  const i = p.stats.intl;
+  if (p.caps.intl > 0 && i.runs > 0) {
+    rows.push({ name: p.name, country: p.country, mat: i.matches, runs: i.runs, ave: battingAverage(i), hs: i.highScore, hundreds: i.hundreds, isPlayer: true });
+  }
+  rows.sort((a, b) => b.runs - a.runs);
+  const onBoard = rows.slice(0, ALL_TIME_BATTING_LEADERS.length);
+  return { rows: onBoard, madeIt: onBoard.some(r => r.isPlayer), cutoffRuns: onBoard[onBoard.length - 1].runs };
+}
+function bowlingLeaderboardRows(p) {
+  const rows = ALL_TIME_BOWLING_LEADERS.map(r => ({ ...r, isPlayer: false }));
+  const i = p.stats.intl;
+  if (p.caps.intl > 0 && i.wickets > 0) {
+    rows.push({ name: p.name, country: p.country, mat: i.matches, wickets: i.wickets, ave: i.wickets ? (i.runsConceded / i.wickets).toFixed(2) : "-", best: i.bestBowling, isPlayer: true });
+  }
+  rows.sort((a, b) => b.wickets - a.wickets);
+  const onBoard = rows.slice(0, ALL_TIME_BOWLING_LEADERS.length);
+  return { rows: onBoard, madeIt: onBoard.some(r => r.isPlayer), cutoffWickets: onBoard[onBoard.length - 1].wickets };
+}
+
+function renderHubLeaders() {
+  const p = state;
+  if (p.caps.intl <= 0) {
+    return `
+      <div class="card">
+        <div class="section-title">All-time international leaders</div>
+        <div class="empty-note" style="padding:10px 0 0;">These boards only open up once you've debuted internationally — real careers only, no domestic or franchise stats.</div>
+      </div>
+    `;
+  }
+  const bat = battingLeaderboardRows(p);
+  const bowl = bowlingLeaderboardRows(p);
+  const i = p.stats.intl;
+  return `
+    <div class="card">
+      <div class="section-title">Most international runs — all time</div>
+      <div class="table-wrap" style="margin-top:8px;">
+        <table class="mini-table">
+          <thead><tr><th>#</th><th>Player</th><th>Mat</th><th>Runs</th><th>Ave</th></tr></thead>
+          <tbody>
+            ${bat.rows.map((r, idx) => `
+              <tr class="${r.isPlayer ? "me-row" : ""}">
+                <td>${idx + 1}</td>
+                <td>${flagFor(r.country)} ${r.name}${r.isPlayer ? " (you)" : ""}</td>
+                <td>${r.mat}</td><td><strong>${r.runs.toLocaleString()}</strong></td><td>${r.ave}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+      ${bat.madeIt
+        ? `<div class="empty-note" style="padding-top:8px;color:var(--accent);">🎉 You've cracked the all-time top ${ALL_TIME_BATTING_LEADERS.length}!</div>`
+        : `<div class="empty-note" style="padding-top:8px;">You're on ${i.runs.toLocaleString()} international runs — ${(bat.cutoffRuns - i.runs + 1).toLocaleString()} short of cracking this list.</div>`}
+    </div>
+    <div class="card">
+      <div class="section-title">Most international wickets — all time</div>
+      <div class="table-wrap" style="margin-top:8px;">
+        <table class="mini-table">
+          <thead><tr><th>#</th><th>Player</th><th>Mat</th><th>Wkts</th><th>Ave</th></tr></thead>
+          <tbody>
+            ${bowl.rows.map((r, idx) => `
+              <tr class="${r.isPlayer ? "me-row" : ""}">
+                <td>${idx + 1}</td>
+                <td>${flagFor(r.country)} ${r.name}${r.isPlayer ? " (you)" : ""}</td>
+                <td>${r.mat}</td><td><strong>${r.wickets}</strong></td><td>${r.ave}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+      ${bowl.madeIt
+        ? `<div class="empty-note" style="padding-top:8px;color:var(--accent);">🎉 You've cracked the all-time top ${ALL_TIME_BOWLING_LEADERS.length}!</div>`
+        : `<div class="empty-note" style="padding-top:8px;">You're on ${i.wickets} international wickets — ${bowl.cutoffWickets - i.wickets + 1} short of cracking this list.</div>`}
+    </div>
   `;
 }
 
