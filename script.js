@@ -996,6 +996,8 @@ function startSeason() {
   p.debutPending = null;
   p.hubTab = "Overview";
   save();
+  // rested from domestic duty entirely this season — nothing to play there, so move straight on
+  if (p.fixtures.length === 0) finishDomesticSeason();
 }
 
 function playDomesticMatch(precomputedPerf, precomputedTossNote, precomputedEngineResult) {
@@ -1057,6 +1059,16 @@ function simRestOfDomesticSeason() {
 function finishDomesticSeason() {
   const p = state;
   p.domesticDone = true;
+  // an established, in-form international mainstay gets rested from domestic duty entirely —
+  // nothing to recap, straight on to the franchise/overseas/international side of the season
+  if (p.fixtures.length === 0) {
+    p.lastLeagueFinish = null;
+    p.lastSeasonSummary = null;
+    if (p.format === "ALL_ROUND") startFranchiseStint();
+    else { p.franchiseDone = true; setupOverseasPhase(); }
+    save();
+    return;
+  }
   const wins = p.fixtures.filter(f => f.won).length;
   const draws = p.fixtures.filter(f => f.result === "DRAW").length;
   const decisive = p.fixtures.length - draws;
@@ -1262,7 +1274,14 @@ function nextIntlLegFormat(p, playedFormats) {
   const remaining = ["TEST", "ODI", "T20"].filter(f => !playedFormats.includes(f));
   return remaining.length ? choice(remaining) : choice(["TEST", "ODI", "T20"]);
 }
-function maxIntlLegsFor(p) { return p.format === "ALL_ROUND" ? 3 : 2; }
+// a true international mainstay's calendar is basically wall-to-wall cricket — once you're rested
+// from domestic duty entirely (see domesticMatchCountFor), the international side of the year
+// opens up a lot further too, since that's now genuinely most of your season
+function maxIntlLegsFor(p) {
+  const base = p.format === "ALL_ROUND" ? 3 : 2;
+  const establishedMainstay = p.caps.intl >= 25 && p.reputation >= 68;
+  return establishedMainstay ? base + 3 : base;
+}
 // how likely a genuinely good player is to be handed extra international cricket this window —
 // scales with skill and reputation so "good enough" players see far more cricket than fringe ones
 function extraSeriesChance(p) {
@@ -1744,6 +1763,9 @@ function clubRelativeStrength(p, strength) {
 function domesticMatchCountFor(p) {
   const caps = p.caps.intl;
   const established = p.reputation >= 55;
+  // a genuine international mainstay in good current form doesn't need domestic cricket most
+  // years at all — it's only fading form or a lack of caps that sends you back to rebuild there
+  if (caps >= 25 && p.reputation >= 68) return 0;
   if (established && caps >= 30) return 4;
   if (established && caps >= 18) return 6;
   if (established && caps >= 8) return 8;
@@ -3094,10 +3116,13 @@ function renderSeasonSummary() {
   screen(`
     ${masthead()}
     <div class="hero" style="padding-top:6px;">
-      <div class="mode-tag">Season ${p.season} · ${label} recap</div>
+      <div class="mode-tag">Season ${p.season} · ${lf ? `${label} recap` : "Rested"}</div>
       <h1>${p.team}</h1>
-      <p>${lf.wins}-${lf.losses}${lf.draws ? `-${lf.draws}` : ""} record · finished ${ordinal(lf.finish)}${lf.champion ? " — 🏆 Champions!" : ""}</p>
+      <p>${lf
+        ? `${lf.wins}-${lf.losses}${lf.draws ? `-${lf.draws}` : ""} record · finished ${ordinal(lf.finish)}${lf.champion ? " — 🏆 Champions!" : ""}`
+        : `An established international, rested from domestic duty this season.`}</p>
     </div>
+    ${sum ? `
     <div class="card">
       <div class="section-title">Your season</div>
       <div class="stat-grid" style="margin-top:10px;">
@@ -3110,6 +3135,7 @@ function renderSeasonSummary() {
       </div>
       ${sum.award ? `<div class="milestone-banner" style="margin-top:12px;">⭐ ${sum.award}</div>` : ""}
     </div>
+    ` : ""}
     <div class="card">
       <div class="section-title">Money</div>
       <div class="stat-grid two" style="margin-top:10px;">
@@ -4144,6 +4170,9 @@ const App = {
     if (p.age >= RETIRE_AGE_HARD || p.season >= MAX_SEASONS) { retirePlayer(); renderRetirement(); return; }
     advanceToNextSeason();
     if (state.retired) return renderRetirement();
+    // rested from domestic duty entirely — startSeason already cascaded straight past it, so route
+    // to wherever the season now actually stands instead of showing a hub with nothing to play
+    if (state.domesticDone) return App.afterDomesticDone();
     renderHub();
   },
 
