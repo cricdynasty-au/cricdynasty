@@ -980,7 +980,7 @@ function startSeason() {
   p.selectedThisSeason = false;
   p.intlFixtures = []; p.intlIndex = 0;
   p.intlCallup = null; p.worldCupHost = null; p.worldCupSemifinalists = null; p.worldCupOtherSemiPair = null; p.worldCupStage = null;
-  p.knockoutIntroShownFor = null;
+  p.knockoutIntroShownFor = null; p.intlSeriesLeg = null;
   p.franchiseFixtures = []; p.franchiseIndex = 0;
   p.lastMatchResult = null; p.lastLeagueFinish = null; p.lastSeasonSummary = null;
   p.lastIntlSummary = null; p.lastFranchiseSummary = null; p.lastOverseasSummary = null;
@@ -1302,16 +1302,36 @@ function buildIntlFixturesFromCallup() {
     const extras = pickN(extraPool, Math.min(2, extraPool.length));
     p.tournamentTable = [p.country, ...groupOpponents, ...extras].map(n => ({ nation: n, played: 0, won: 0, lost: 0, pts: 0 }));
   } else {
-    // a bilateral series — one opponent, hosted by one side, played across a few of their grounds
-    const games = fmt === "TEST" ? randInt(2, 5) : randInt(3, 5);
+    // a bilateral series — one opponent, hosted by one side, played across a few of their grounds.
+    // Test tours run longer than a white-ball series — a proper season's worth of cricket, not a flying visit
+    const games = fmt === "TEST" ? randInt(4, 8) : randInt(3, 5);
     const host = Math.random() < 0.5 ? p.country : c.opponent;
     const seriesStrength = randInt(45, 80);
     p.intlFixtures = Array.from({ length: games }, () => ({
       opponent: c.opponent, oppStrength: clamp(seriesStrength + randInt(-6, 6), 30, 95),
       played: false, fmt, tag: c.name, ground: groundFor(host),
     }));
+    p.intlSeriesLeg = 1;
   }
   p.intlIndex = 0;
+  save();
+}
+
+// a specialist Test player's year doesn't end after one tour — roll a second bilateral series
+// (a different opponent) before the international window wraps up, same as a real Test calendar
+function startSecondTestSeries() {
+  const p = state;
+  const firstOpp = p.intlFixtures.length ? p.intlFixtures[0].opponent : null;
+  const opp = choice(OPPONENT_NATIONS_POOL.filter(n => n !== p.country && n !== firstOpp));
+  const games = randInt(4, 8);
+  const host = Math.random() < 0.5 ? p.country : opp;
+  const seriesStrength = randInt(45, 80);
+  const seriesName = seriesNameFor(p.country, opp, "TEST");
+  const newFixtures = Array.from({ length: games }, () => ({
+    opponent: opp, oppStrength: clamp(seriesStrength + randInt(-6, 6), 30, 95),
+    played: false, fmt: "TEST", tag: seriesName, ground: groundFor(host),
+  }));
+  p.intlFixtures.push(...newFixtures);
   save();
 }
 
@@ -1371,6 +1391,11 @@ function advanceIntlWindow() {
       p.worldCupStage = lastFx.won ? "CHAMPION" : "FINAL_LOSS";
       return finishInternationalWindow();
     }
+  }
+  // a dedicated Test player's calendar has more than one tour a year — chain a second series in
+  if (!p.bigEvent.active && p.format === "LONG" && p.intlSeriesLeg === 1) {
+    p.intlSeriesLeg = 2;
+    if (Math.random() < 0.6) return startSecondTestSeries();
   }
   finishInternationalWindow();
 }
@@ -4136,7 +4161,7 @@ function freshPlayer(d) {
     selectedThisSeason: false,
     intlFixtures: [], intlIndex: 0,
     intlCallup: null, worldCupHost: null, worldCupSemifinalists: null, worldCupOtherSemiPair: null, worldCupStage: null,
-    knockoutIntroShownFor: null,
+    knockoutIntroShownFor: null, intlSeriesLeg: null,
     franchiseFixtures: [], franchiseIndex: 0,
     domesticDone: false, intlDone: false, franchiseDone: false,
     overseasPending: false, overseasDone: true, overseasOffer: null, franchiseHistory: [],
