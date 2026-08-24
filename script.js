@@ -1247,12 +1247,22 @@ function seriesNameFor(countryA, countryB, fmt) {
   if (fmt === "TEST" && isRivalrySeries(countryA, countryB)) return RIVALRY_SERIES[[countryA, countryB].sort().join("|")];
   return `${countryB} ${FMT_SERIES_WORD[fmt] || "International"} Series`;
 }
-// the marquee rivalries get a full 5-Test series like the real thing; everyone else gets a shorter,
-// more modest tour — a Bangladesh-Australia series is 2-3 Tests, not 5
+// the marquee rivalries get a full 5-Test series like the real thing, every time — an Ashes or a
+// Border-Gavaskar summer is always 5 Tests; everyone else gets a shorter, more modest tour —
+// a Bangladesh-Australia series is 2-3 Tests, not 5
 function seriesGameCount(fmt, countryA, countryB) {
   if (fmt !== "TEST") return randInt(3, 5);
-  return isRivalrySeries(countryA, countryB) ? (Math.random() < 0.8 ? 5 : 4) : randInt(2, 3);
+  return isRivalrySeries(countryA, countryB) ? 5 : randInt(2, 3);
 }
+// which format the NEXT chained leg should be — All-Round cycles through formats it hasn't
+// played yet this window (a Test tour, then the white-ball leg in between); Long/Short only
+// ever have the one format, so they just tour again in it
+function nextIntlLegFormat(p, playedFormats) {
+  if (p.format !== "ALL_ROUND") return playedFormats[0];
+  const remaining = ["TEST", "ODI", "T20"].filter(f => !playedFormats.includes(f));
+  return remaining.length ? choice(remaining) : choice(["TEST", "ODI", "T20"]);
+}
+function maxIntlLegsFor(p) { return p.format === "ALL_ROUND" ? 3 : 2; }
 // how likely a genuinely good player is to be handed extra international cricket this window —
 // scales with skill and reputation so "good enough" players see far more cricket than fringe ones
 function extraSeriesChance(p) {
@@ -1338,12 +1348,13 @@ function buildIntlFixturesFromCallup() {
   save();
 }
 
-// a good enough player's year doesn't end after one tour — roll a second bilateral series
-// (a different opponent, same format) before the international window wraps up
-function startSecondBilateralSeries(fmt) {
+// a good enough player's year doesn't end after one tour — roll another bilateral series
+// (a fresh opponent, possibly a different format for All-Round) before the window wraps up
+function startNextBilateralSeries(fmt) {
   const p = state;
-  const firstOpp = p.intlFixtures.length ? p.intlFixtures[0].opponent : null;
-  const opp = choice(OPPONENT_NATIONS_POOL.filter(n => n !== p.country && n !== firstOpp));
+  const facedAlready = new Set(p.intlFixtures.map(f => f.opponent));
+  const pool = OPPONENT_NATIONS_POOL.filter(n => n !== p.country && !facedAlready.has(n));
+  const opp = choice(pool.length ? pool : OPPONENT_NATIONS_POOL.filter(n => n !== p.country));
   const games = seriesGameCount(fmt, p.country, opp);
   const host = Math.random() < 0.5 ? p.country : opp;
   const seriesStrength = randInt(45, 80);
@@ -1413,12 +1424,18 @@ function advanceIntlWindow() {
       return finishInternationalWindow();
     }
   }
-  // a good enough player's calendar has more than one tour a year — chain a second series in,
-  // regardless of format, with the odds scaled by just how good you actually are
-  if (!p.bigEvent.active && p.intlSeriesLeg === 1) {
-    p.intlSeriesLeg = 2;
-    const fmt = p.intlFixtures.length ? p.intlFixtures[0].fmt : intlFmtTag(p);
-    if (Math.random() < extraSeriesChance(p)) return startSecondBilateralSeries(fmt);
+  // a good enough player's calendar has more than one tour a year — chain another series in,
+  // with the odds scaled by just how good you actually are. All-Round players can end up with a
+  // real mixed-format year (a Test tour, then white-ball cricket in between); Long/Short just
+  // tour again in their one format.
+  if (!p.bigEvent.active) {
+    const leg = p.intlSeriesLeg || 1;
+    if (leg < maxIntlLegsFor(p) && Math.random() < extraSeriesChance(p)) {
+      const playedFormats = [...new Set(p.intlFixtures.map(f => f.fmt))];
+      const nextFmt = nextIntlLegFormat(p, playedFormats);
+      p.intlSeriesLeg = leg + 1;
+      return startNextBilateralSeries(nextFmt);
+    }
   }
   finishInternationalWindow();
 }
