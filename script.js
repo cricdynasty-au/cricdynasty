@@ -1235,12 +1235,28 @@ const RIVALRY_SERIES = {
   "India|South Africa": "Freedom Trophy",
 };
 const FMT_SERIES_WORD = { TEST: "Test", ODI: "ODI", T20: "T20I" };
+function isRivalrySeries(countryA, countryB) {
+  return !!RIVALRY_SERIES[[countryA, countryB].sort().join("|")];
+}
 function seriesNameFor(countryA, countryB, fmt) {
-  if (fmt === "TEST") {
-    const key = [countryA, countryB].sort().join("|");
-    if (RIVALRY_SERIES[key]) return RIVALRY_SERIES[key];
-  }
+  if (fmt === "TEST" && isRivalrySeries(countryA, countryB)) return RIVALRY_SERIES[[countryA, countryB].sort().join("|")];
   return `${countryB} ${FMT_SERIES_WORD[fmt] || "International"} Series`;
+}
+// the marquee rivalries get a full 5-Test series like the real thing; everyone else gets a shorter,
+// more modest tour — a Bangladesh-Australia series is 2-3 Tests, not 5
+function seriesGameCount(fmt, countryA, countryB) {
+  if (fmt !== "TEST") return randInt(3, 5);
+  return isRivalrySeries(countryA, countryB) ? (Math.random() < 0.8 ? 5 : 4) : randInt(2, 3);
+}
+// how likely a genuinely good player is to be handed extra international cricket this window —
+// scales with skill and reputation so "good enough" players see far more cricket than fringe ones
+function extraSeriesChance(p) {
+  // your best skill, not an average of both — a specialist batter's low bowling attribute
+  // shouldn't drag down how "good enough" they are considered to be
+  const skill = Math.max(p.bat, p.bowl);
+  const base = clamp((skill - 40) / 70, 0, 0.75);
+  const repBonus = clamp((p.reputation - 50) / 200, 0, 0.2);
+  return clamp(base + repBonus, 0.03, 0.85);
 }
 
 function decideInternationalSelection() {
@@ -1303,8 +1319,8 @@ function buildIntlFixturesFromCallup() {
     p.tournamentTable = [p.country, ...groupOpponents, ...extras].map(n => ({ nation: n, played: 0, won: 0, lost: 0, pts: 0 }));
   } else {
     // a bilateral series — one opponent, hosted by one side, played across a few of their grounds.
-    // Test tours run longer than a white-ball series — a proper season's worth of cricket, not a flying visit
-    const games = fmt === "TEST" ? randInt(4, 8) : randInt(3, 5);
+    // marquee rivalries get a full series like the real thing; everyone else gets a shorter tour
+    const games = seriesGameCount(fmt, p.country, c.opponent);
     const host = Math.random() < 0.5 ? p.country : c.opponent;
     const seriesStrength = randInt(45, 80);
     p.intlFixtures = Array.from({ length: games }, () => ({
@@ -1317,19 +1333,19 @@ function buildIntlFixturesFromCallup() {
   save();
 }
 
-// a specialist Test player's year doesn't end after one tour — roll a second bilateral series
-// (a different opponent) before the international window wraps up, same as a real Test calendar
-function startSecondTestSeries() {
+// a good enough player's year doesn't end after one tour — roll a second bilateral series
+// (a different opponent, same format) before the international window wraps up
+function startSecondBilateralSeries(fmt) {
   const p = state;
   const firstOpp = p.intlFixtures.length ? p.intlFixtures[0].opponent : null;
   const opp = choice(OPPONENT_NATIONS_POOL.filter(n => n !== p.country && n !== firstOpp));
-  const games = randInt(4, 8);
+  const games = seriesGameCount(fmt, p.country, opp);
   const host = Math.random() < 0.5 ? p.country : opp;
   const seriesStrength = randInt(45, 80);
-  const seriesName = seriesNameFor(p.country, opp, "TEST");
+  const seriesName = seriesNameFor(p.country, opp, fmt);
   const newFixtures = Array.from({ length: games }, () => ({
     opponent: opp, oppStrength: clamp(seriesStrength + randInt(-6, 6), 30, 95),
-    played: false, fmt: "TEST", tag: seriesName, ground: groundFor(host),
+    played: false, fmt, tag: seriesName, ground: groundFor(host),
   }));
   p.intlFixtures.push(...newFixtures);
   save();
@@ -1392,10 +1408,12 @@ function advanceIntlWindow() {
       return finishInternationalWindow();
     }
   }
-  // a dedicated Test player's calendar has more than one tour a year — chain a second series in
-  if (!p.bigEvent.active && p.format === "LONG" && p.intlSeriesLeg === 1) {
+  // a good enough player's calendar has more than one tour a year — chain a second series in,
+  // regardless of format, with the odds scaled by just how good you actually are
+  if (!p.bigEvent.active && p.intlSeriesLeg === 1) {
     p.intlSeriesLeg = 2;
-    if (Math.random() < 0.6) return startSecondTestSeries();
+    const fmt = p.intlFixtures.length ? p.intlFixtures[0].fmt : intlFmtTag(p);
+    if (Math.random() < extraSeriesChance(p)) return startSecondBilateralSeries(fmt);
   }
   finishInternationalWindow();
 }
