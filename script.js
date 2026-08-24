@@ -575,7 +575,7 @@ function finalBattingPerf(li) {
 }
 
 // one third of an innings — used by the live, phase-by-phase play flow
-function simulateBattingPhase(effRating, oppStrength, fmt, approach) {
+function simulateBattingPhase(effRating, oppStrength, fmt, approach, phaseIndex) {
   const app = BATTING_APPROACHES[approach] || BATTING_APPROACHES.Balanced;
   const longFmt = fmt === "TEST" || fmt === "FC";
   const form = randInt(-8, 8);
@@ -593,8 +593,13 @@ function simulateBattingPhase(effRating, oppStrength, fmt, approach) {
     balls = randInt(35, 85);
     srFloor = 8; srSlope = 0.44; srCap = 78; fourShare = [0.1, 0.22]; sixShare = [0, 0.04];
   } else if (fmt === "ODI") {
-    balls = randInt(15, 35);
-    srFloor = 12; srSlope = 0.95; srCap = 140; fourShare = [0.12, 0.26]; sixShare = [0.01, 0.06];
+    // the middle overs are ~30 of the innings' 50 — occupying that phase means facing a lot more deliveries
+    // than the 10-over powerplay or death, so each phase gets its own realistic ball count instead of one range for all three
+    const odiBallsByPhase = [[20, 40], [35, 65], [15, 30]];
+    const range = odiBallsByPhase[phaseIndex] || odiBallsByPhase[1];
+    balls = randInt(range[0], range[1]);
+    // rebalanced down from the old flat-range constants so more balls faced doesn't also mean way more centuries
+    srFloor = 9; srSlope = 0.72; srCap = 110; fourShare = [0.12, 0.26]; sixShare = [0.01, 0.06];
   } else {
     balls = randInt(9, 22);
     srFloor = 13; srSlope = 1.3; srCap = 205; fourShare = [0.14, 0.3]; sixShare = [0.02, 0.1];
@@ -3712,7 +3717,7 @@ const App = {
     const p = state;
     const li = window.__live;
     const effRating = (p.role !== "Bowler" ? p.bat : Math.max(p.bat, 8)) * li.cond.battingMult + perkBatBonus(k);
-    const seg = simulateBattingPhase(effRating, li.fx.oppStrength, li.fx.fmt, k);
+    const seg = simulateBattingPhase(effRating, li.fx.oppStrength, li.fx.fmt, k, li.battingPhase);
     li.bat.runs += seg.runs; li.bat.balls += seg.balls; li.bat.fours += seg.fours; li.bat.sixes += seg.sixes;
     li.battingPhase++;
     li.lastBatSeg = seg;
