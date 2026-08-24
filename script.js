@@ -22,17 +22,19 @@ const NATION_STRENGTH = {
 };
 
 // brand colour per board — used to re-theme the whole app on selection
+// accents are tuned to stay clearly visible as text/borders/icons on a near-black background —
+// several board colours (navy, maroon, dark green) were too close to black to read at their real shade
 const THEMES = {
   "India": { accent: "#2563eb", accent2: "#f2b632", text: "#eaf1ff" },
   "Australia": { accent: "#1f7a44", accent2: "#ffd400", text: "#eafff0" },
-  "England": { accent: "#13285e", accent2: "#c8102e", text: "#eef1ff" },
-  "Pakistan": { accent: "#0b6623", accent2: "#ffffff", text: "#eafff0" },
-  "South Africa": { accent: "#00795d", accent2: "#f2c14e", text: "#eafff8" },
-  "New Zealand": { accent: "#5c6470", accent2: "#e5e7eb", text: "#f5f5f6" },
-  "West Indies": { accent: "#7a0019", accent2: "#f2c14e", text: "#ffeef1" },
-  "Sri Lanka": { accent: "#123a7a", accent2: "#f2c14e", text: "#eaf1ff" },
-  "Bangladesh": { accent: "#046a38", accent2: "#e2231a", text: "#eafff2" },
-  "Afghanistan": { accent: "#1a56db", accent2: "#d32011", text: "#eaf1ff" },
+  "England": { accent: "#3f63c2", accent2: "#e0344e", text: "#eef1ff" },
+  "Pakistan": { accent: "#17944a", accent2: "#ffffff", text: "#eafff0" },
+  "South Africa": { accent: "#00a37d", accent2: "#f2c14e", text: "#eafff8" },
+  "New Zealand": { accent: "#8a93a3", accent2: "#e5e7eb", text: "#f5f5f6" },
+  "West Indies": { accent: "#d5455c", accent2: "#f2c14e", text: "#ffeef1" },
+  "Sri Lanka": { accent: "#3568c2", accent2: "#f2c14e", text: "#eaf1ff" },
+  "Bangladesh": { accent: "#0a8f4a", accent2: "#e8443a", text: "#eafff2" },
+  "Afghanistan": { accent: "#3d76ea", accent2: "#e0442f", text: "#eaf1ff" },
   "default": { accent: "#5fd97a", accent2: "#f2c14e", text: "#06130a" },
 };
 
